@@ -1,6 +1,6 @@
 {
   "name": "link2context",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "description": "Turn links into structured, media-aware, AI-ready context for web AI.",
