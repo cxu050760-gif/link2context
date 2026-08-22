@@ -66,6 +66,7 @@ export async function parseHtmlToContext({
       extractionStrategy: parsed.extraction?.strategy || 'structured-dom',
       readabilityApplied: Boolean(parsed.extraction?.readability),
       sourcePage: Number(page) || 1,
+      structuredTruncated: Boolean(parsed.extraction?.truncated),
     },
   });
 }
@@ -109,6 +110,7 @@ export function mergeContextPages(documents, { sourceUrl = '' } = {}) {
       extractionStrategy: strategies.join(' + ') || 'structured-dom',
       pageCount: docs.length,
       readabilityApplied: docs.some((doc) => doc.metadata?.readabilityApplied === true),
+      structuredTruncated: docs.some((doc) => doc.metadata?.structuredTruncated === true),
     },
   });
 }
@@ -144,10 +146,16 @@ export function selectContextImages(document, { limit = 8 } = {}) {
 }
 
 export function structuredContextSummary(document) {
+  const metadata = document?.metadata || {};
   return {
     ...contextStats(document),
-    pageCount: Number(document?.metadata?.pageCount) || 1,
-    extractionStrategy: document?.metadata?.extractionStrategy || '',
+    pageCount: Number(metadata.pageCount) || 1,
+    extractionStrategy: metadata.extractionStrategy || '',
+    partialReason: String(metadata.partialReason || ''),
+    imageAssetsPartial: metadata.imageAssetsPartial === true,
+    imageAssetsSelected: Math.max(0, Number(metadata.imageAssetsSelected) || 0),
+    imageAssetsAcquired: Math.max(0, Number(metadata.imageAssetsAcquired) || 0),
+    structuredTruncated: metadata.structuredTruncated === true,
   };
 }
 
