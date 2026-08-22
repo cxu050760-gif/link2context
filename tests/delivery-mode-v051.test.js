@@ -82,12 +82,14 @@ test('attachment filename hints include a truncated-chip-safe distinctive prefix
   assert.ok(hints.includes(stem.slice(0, 24)));
 });
 
-test('manifest loads V0.5.2 reliability policy before the established V0.5.1 content script', () => {
+test('manifest loads the single V0.5.3 handoff runtime after progress and delivery policy', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const scripts = manifest.content_scripts[0].js;
-  assert.deepEqual(scripts, ['progress-ui.js', 'delivery-mode.js', 'handoff-reliability-v052.js', 'content-script-v051.js']);
-  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('handoff-reliability-v052.js'));
-  assert.ok(scripts.indexOf('handoff-reliability-v052.js') < scripts.indexOf('content-script-v051.js'));
+  assert.deepEqual(scripts, ['progress-ui.js', 'delivery-mode.js', 'content-script-v053.js']);
+  assert.ok(scripts.indexOf('progress-ui.js') < scripts.indexOf('delivery-mode.js'));
+  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('content-script-v053.js'));
+  assert.ok(!scripts.includes('handoff-reliability-v052.js'));
+  assert.ok(!scripts.includes('content-script-v051.js'));
 });
 
 test('popup exposes explicit Auto, Markdown document, and long-text choices', () => {
