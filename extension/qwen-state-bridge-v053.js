@@ -71,6 +71,12 @@
       || document;
   }
 
+  function attachmentScope(editor) {
+    const scope = composerScope(editor);
+    if (scope !== document) return scope;
+    return editor?.parentElement || null;
+  }
+
   function controlText(el) {
     if (!(el instanceof Element)) return '';
     return normalizeText([
@@ -81,30 +87,26 @@
 
   function sendScore(el, editor, scope) {
     if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return -Infinity;
+    if (scope === document || !scope.contains(el)) return -Infinity;
     const text = controlText(el);
     if (/(stop|cancel|attach|upload|image|photo|camera|voice|mic|record|search|tool|停止|取消|附件|上传|图片|照片|相机|语音|麦克风|搜索|工具)/i.test(text)) return -Infinity;
     let score = 0;
     if (/(^|\b)(send|ask|发送|送出|提问|发送消息|send message)(\b|$)/i.test(text)) score += 20;
     if (/(send|submit)/i.test(el.getAttribute('data-testid') || '')) score += 16;
     if ((el.matches('button,input') && String(el.getAttribute('type')).toLowerCase() === 'submit')) score += 14;
-    if (scope !== document && scope.contains(el)) score += 5;
+    if (scope.contains(el)) score += 5;
     if (el.querySelector?.('svg')) score += 3;
     return score;
   }
 
   function findSendButton(editor, preferred = null) {
     const scope = composerScope(editor);
-    if (preferred?.isConnected && sendScore(preferred, editor, scope) >= 5) return preferred;
-    const local = [...scope.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
+    if (scope === document) return null;
+    if (preferred?.isConnected && scope.contains(preferred) && sendScore(preferred, editor, scope) >= 5) return preferred;
+    return [...scope.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
       .map((el) => ({ el, score: sendScore(el, editor, scope) }))
       .filter((item) => item.score >= 5)
-      .sort((a, b) => b.score - a.score);
-    if (local[0]) return local[0].el;
-    const strong = [...document.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
-      .map((el) => ({ el, score: sendScore(el, editor, document) }))
-      .filter((item) => item.score >= 14)
-      .sort((a, b) => b.score - a.score);
-    return strong[0]?.el || null;
+      .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   function report(stage, label, detail = '', extra = {}) {
@@ -220,11 +222,6 @@
     editor.focus();
     if (!selectEditorContents(editor)) return null;
 
-    // Important: use the browser editing command only. Do not set innerHTML,
-    // textContent/value, or dispatch a synthetic input event after it. Qwen's
-    // controlled editor can render those DOM mutations while keeping a different
-    // internal send state. execCommand(insertText) goes through the editor's
-    // normal browser editing path instead of manufacturing a second DOM truth.
     let inserted = false;
     try { inserted = Boolean(document.execCommand?.('insertText', false, text)); } catch { inserted = false; }
     if (!inserted) return null;
@@ -236,8 +233,6 @@
     const firstRead = normalizeText(editorText(current));
     if (!signature.length || !signature.every((part) => firstRead.includes(part))) return null;
 
-    // Force one focus reconciliation. A DOM-only ghost frequently disappears or
-    // loses sendability here; real editor state survives and keeps Send enabled.
     try { current.blur(); } catch { /* no-op */ }
     await sleep(80, job);
     try { current.focus(); } catch { /* no-op */ }
@@ -317,6 +312,11 @@
     });
   }
 
+  function usableFileInput(input, file) {
+    return Boolean(input) && !input.disabled && input.getAttribute?.('aria-disabled') !== 'true'
+      && (file.type.startsWith('image/') || !isImageOnlyInput(input)) && inputAccepts(input, file);
+  }
+
   function attachmentControlScore(el) {
     const text = controlText(el);
     let score = 0;
@@ -328,38 +328,39 @@
     return score;
   }
 
+  function safeAttachmentControl(el) {
+    if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return String(el.type || el.getAttribute('type') || '').toLowerCase() !== 'submit';
+  }
+
   function bestAttachmentControl(scope) {
+    if (!scope) return null;
     return [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
-      .filter(visible)
+      .filter((el) => safeAttachmentControl(el))
       .map((el) => ({ el, score: attachmentControlScore(el) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   async function findFileInput(editor, file, job) {
-    const scope = composerScope(editor);
-    const candidate = () => {
-      const inputs = [...document.querySelectorAll('input[type="file"]')]
-        .filter((input) => file.type.startsWith('image/') || !isImageOnlyInput(input));
-      return inputs.find((input) => inputAccepts(input, file)) || inputs[0] || null;
-    };
-    let input = candidate();
+    const scope = attachmentScope(editor);
+    if (!scope) return null;
+    const local = () => [...scope.querySelectorAll('input[type="file"]')]
+      .find((input) => !input.disabled && input.getAttribute('aria-disabled') !== 'true' && usableFileInput(input, file)) || null;
+    let input = local();
     if (input) return input;
-    const first = bestAttachmentControl(scope) || bestAttachmentControl(document);
+
+    const baseline = new Set(document.querySelectorAll('input[type="file"]'));
+    const first = bestAttachmentControl(scope);
     if (!first) return null;
     first.click();
     await sleep(350, job);
     assertActive(job);
-    input = candidate();
+    input = local();
     if (input) return input;
-    const second = bestAttachmentControl(document);
-    if (second && second !== first) {
-      second.click();
-      await sleep(350, job);
-      assertActive(job);
-      input = candidate();
-    }
-    return input;
+    return [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !baseline.has(candidate) && !candidate.disabled
+        && candidate.getAttribute('aria-disabled') !== 'true' && usableFileInput(candidate, file)) || null;
   }
 
   function filenameHints(fileName) {
@@ -379,29 +380,22 @@
   async function attachBinaryWithStateProof(result, editor, job) {
     const file = new File([base64ToBytes(result.base64)], result.fileName, { type: result.mime || 'application/octet-stream' });
     const input = await findFileInput(editor, file, job);
-    if (!input) return null;
-    const oldAccept = input.getAttribute('accept');
-    if (!inputAccepts(input, file)) input.removeAttribute('accept');
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    } finally {
-      if (oldAccept === null) input.removeAttribute('accept');
-      else input.setAttribute('accept', oldAccept);
-    }
+    if (!usableFileInput(input, file)) return null;
+    const initialScope = attachmentScope(editor);
+    const filenameWasVisible = scopeHasFilename(initialScope, file.name);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
       const current = currentComposer(editor);
-      const filenameVisible = scopeHasFilename(composerScope(current || editor), file.name)
-        || scopeHasFilename(document.body, file.name);
+      const scope = attachmentScope(current || editor);
+      const filenameVisible = !filenameWasVisible && scopeHasFilename(scope, file.name);
       const send = findSendButton(current || editor);
-      // Filename visibility alone is explicitly NOT enough. The user's live Qwen
-      // test proved it can be a ghost DOM card that cannot actually be sent.
       if (filenameVisible && send) return { editor: current || editor, button: send, fileName: file.name };
       await sleep(250, job);
     }
@@ -414,9 +408,9 @@
     event.stopImmediatePropagation?.();
   }
 
-  async function resolveUrl(url) {
+  async function resolveUrl(url, startedAt) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true }, (response) => {
+      chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true, startedAt }, (response) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
         else resolve(response);
       });
@@ -428,11 +422,11 @@
       showToast('Link2Context 已有千问任务在处理，请等待或先 STOP。', true);
       return false;
     }
-    const job = { editor, url, busy: true, cancelled: false, autoSubmit: await autoSendEnabled() };
+    const job = { editor, url, busy: true, cancelled: false, autoSubmit: await autoSendEnabled(), startedAt: Date.now() };
     activeJob = job;
     try {
       report('qwen-state-start', '千问状态安全模式 / Qwen state-safe mode', 'V0.5.3 只接受可证明进入千问真实发送状态的交付。');
-      const result = await resolveUrl(url);
+      const result = await resolveUrl(url, job.startedAt);
       assertActive(job);
       if (!result?.ok) {
         const error = new Error(result?.error || '链接读取失败 / Failed to read link');
@@ -512,7 +506,9 @@
   }
 
   document.addEventListener('link2context:cancel', () => {
-    if (activeJob?.busy) activeJob.cancelled = true;
+    if (!activeJob?.busy) return;
+    activeJob.cancelled = true;
+    chrome.runtime.sendMessage({ type: 'L2C_CANCEL_JOB', startedAt: activeJob.startedAt }, () => void chrome.runtime.lastError);
   }, true);
 
   // This listener is intentionally registered before the generic V0.5.3 runtime.
@@ -544,9 +540,11 @@
     if (!button) return;
     const editor = currentComposer(editorFromTarget(event.target));
     if (!editor) return;
+    const scope = composerScope(editor);
+    if (scope === document || !scope.contains(button)) return;
     const url = singleUrl(editorText(editor));
     if (!url) return;
-    if (sendScore(button, editor, composerScope(editor)) < 5) return;
+    if (sendScore(button, editor, scope) < 5) return;
     stopEvent(event);
     start(editor, url, { preferredButton: button }).catch(() => {});
   }, true);
