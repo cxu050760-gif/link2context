@@ -36,7 +36,7 @@ async function requireCurrentDebuggerHost(tabId, predicate, code, label) {
   let host = '';
   try { host = new URL(tab?.url || '').hostname.toLowerCase(); } catch { /* fail below */ }
   if (!host || !predicate(host)) {
-    const error = new Error(`${label} navigation changed before debugger input / 调试器输入前页面已跳转到非授权站点`);
+    const error = new Error(String(label) + ' navigation changed before debugger input / 调试器输入前页面已跳转到非授权站点');
     error.debuggerCode = code;
     throw error;
   }
@@ -54,8 +54,8 @@ async function withDebugger(tabId, task, failurePrefix = 'DEBUGGER') {
     if (error?.debuggerCode) return debuggerFailure(error, error.debuggerCode);
     const message = String(error?.message || error || '');
     const code = /another debugger|already attached|debugger is already attached/i.test(message)
-      ? `${failurePrefix}_BUSY`
-      : `${failurePrefix}_ATTACH_FAILED`;
+      ? String(failurePrefix) + '_BUSY'
+      : String(failurePrefix) + '_ATTACH_FAILED';
     return debuggerFailure(error, code);
   } finally {
     if (attached) {
@@ -81,7 +81,7 @@ async function insertTextViaDebugger(tabId, text) {
 }
 
 async function pressEnterViaDebugger(tabId, prefix = 'DEBUGGER', predicate = () => false) {
-  const navigationCode = `${prefix}_NAVIGATION_DENIED`;
+  const navigationCode = String(prefix) + '_NAVIGATION_DENIED';
   return withDebugger(tabId, async (target) => {
     const common = {
       key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
