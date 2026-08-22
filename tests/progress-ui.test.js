@@ -8,9 +8,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-test('v0.2.3 loads progress UI before the interception content script', () => {
+test('progress UI loads before the interception content script', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
-  assert.equal(manifest.version, '0.2.3');
+  const pkg = JSON.parse(read('package.json'));
+  assert.equal(manifest.version, pkg.version);
   assert.deepEqual(manifest.content_scripts[0].js.slice(0, 2), ['progress-ui.js', 'content-script.js']);
 });
 
@@ -38,11 +39,12 @@ test('closing the panel suppresses the current job until a new start arrives', (
   assert.match(ui, /suppressedStartedAt = 0/);
 });
 
-test('background reports important fetch, WorkBuddy fallback and parsing stages', () => {
+test('background reports important fetch, fallback and parsing stages', () => {
   const background = read('extension/background.js');
   for (const stage of [
     'direct-fetch', 'direct-retry', 'compatibility-retry', 'direct-failed',
     'fallback-open', 'fallback-wait', 'fallback-extract', 'fallback-extracted',
+    'resolve-chatgpt', 'chatgpt-fallback-open', 'chatgpt-fallback-extract',
     'normalize', 'prepare-output', 'ready', 'error',
   ]) {
     assert.match(background, new RegExp(`['"]${stage}['"]`));
