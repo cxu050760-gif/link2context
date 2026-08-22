@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchBounded, fetchBoundedWithRetry } from '../extension/core/fetch-url.js';
+import { classifyFetchFailure, fetchBounded, fetchBoundedWithRetry } from '../extension/core/fetch-url.js';
 
 function response(body = 'ok', init = {}) {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/plain', ...(init.headers || {}) }, ...init });
@@ -138,11 +138,19 @@ test('non-retryable HTTP 404 is not retried or compatibility-fetched', async () 
   assert.equal(n, 1);
 });
 
-test('timeout aborts a stuck fetch', async () => {
-  await assert.rejects(() => fetchBounded('https://example.com', {
-    timeoutMs: 10,
-    fetchFn: async (_url, options) => new Promise((_resolve, reject) => {
-      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
-    }),
-  }), /aborted/);
+test('timeout aborts a stuck fetch with a structured FETCH_TIMEOUT code', async () => {
+  let caught;
+  try {
+    await fetchBounded('https://example.com', {
+      timeoutMs: 10,
+      fetchFn: async (_url, options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      }),
+    });
+  } catch (error) { caught = error; }
+  assert.ok(caught);
+  const info = classifyFetchFailure(caught);
+  assert.equal(info.code, 'FETCH_TIMEOUT');
+  assert.equal(info.stage, 'FETCH');
+  assert.match(info.message, /timed out|超时/i);
 });
