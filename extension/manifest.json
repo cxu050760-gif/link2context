@@ -12,7 +12,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["progress-ui.js", "delivery-mode.js", "content-script-v053.js"],
+      "js": ["progress-ui.js", "delivery-mode.js", "qwen-state-bridge-v053.js", "content-script-v053.js"],
       "run_at": "document_start",
       "all_frames": false
     }
