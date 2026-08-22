@@ -4,7 +4,7 @@ English | [中文](./README.md)
 
 **Give a web AI one URL. Link2Context tries to acquire the real information completely, preserve structure, key images, and original files, then hand it to the current AI in a form that target can accept. Anything partial, unsupported, or unverified is surfaced explicitly instead of being silently dropped.**
 
-> Current version: **V0.6.0 — Structured Context Bridge**. V0.6 is code-complete and functionally frozen. Third-party live-browser evidence is tracked separately from code completion in `docs/V0.6-LIVE-EVIDENCE.md`.
+> Current version: **V0.6.1 — Structured Context Bridge hardening patch**. V0.6 feature scope remains frozen; V0.6.1 is limited to adversarial hardening and regression fixes. Third-party live-browser evidence is tracked separately from code completion in `docs/V0.6-LIVE-EVIDENCE.md`.
 
 ## V0.6 highlights
 
@@ -16,6 +16,7 @@ English | [中文](./README.md)
 - **Better legacy encodings:** BOM → HTTP charset → document declaration → UTF-8 validity → bounded fallback, with charset source/confidence recorded.
 - **Target-aware delivery:** ChatGPT, DeepSeek, Doubao, and Qianwen have dedicated Target Profiles. Manual handoff and auto-send are separate capabilities; missing V0.6 live evidence stays `UNVERIFIED`.
 - **Proven behavior is retained rather than rewritten:** Qianwen keeps the V0.5.3 CDP `Input.insertText` + real Enter path. PDFs, images, Office files, archives, audio/video, and unknown binary resources remain original-file attachments.
+- **V0.6.1 adversarial hardening:** the patch attacks network address-space downgrade, redirects, debugger TOCTOU, STOP job identity, attachment-input isolation, partial-state propagation, pagination identity, URL-secret redaction, and parser resource limits, followed by additional HTTPS-only debugger and CDP failure-classification hardening.
 
 ## How it works
 
@@ -39,14 +40,14 @@ URL/resource
 
 - HTTP / HTTPS only; embedded URL credentials are rejected.
 - localhost, private/link-local/special-purpose address space, and cloud metadata targets are blocked.
-- Network redirect targets are revalidated. Authorized rendered navigation also rechecks authorization and the host deny-list.
-- Automatic load-more actions are bounded; cross-origin anchor candidates are not auto-clicked.
+- Network redirect targets are revalidated. Authorized rendered navigation also rechecks authorization, the host deny-list, and the originally authorized origin.
+- Automatic load-more actions are bounded; cross-origin anchors and form/submit controls are not auto-clicked.
 - Ordinary fetching is unauthenticated by default. Authorized Browser Context is explicit opt-in, revocable, and deny-listable by host.
 - Link2Context does not directly read Cookie values with `chrome.cookies`, and does not bypass login walls, CAPTCHAs, paywalls, DRM, or site access control.
 - External page content is `untrusted-external` data, never promoted to system/user instructions.
-- File handoff respects the site's `<input type="file" accept=...>` contract. An incompatible uploader fails closed instead of having its `accept` restriction removed.
+- File handoff respects the site's `<input type="file" accept=...>` contract. Attachment proof is scoped to the active composer so unrelated page text cannot fake success.
 - Disabled send controls are never force-enabled.
-- `debugger` is not exposed as a generic automation interface. Qianwen keeps a small fixed input action set; other targets can use only a bounded Enter fallback when Auto-send is explicitly enabled.
+- `debugger` is not exposed as a generic automation interface. Qianwen's fixed input actions are restricted to supported HTTPS hosts; other targets can use only a bounded Enter fallback on fixed HTTPS AI hosts when Auto-send is explicitly enabled.
 - Auto-send requires independent post-send evidence or returns `SEND_UNCONFIRMED`.
 
 See [SECURITY.md](./SECURITY.md).
@@ -73,15 +74,16 @@ npm test
 npm run check
 ```
 
-V0.6 requires a fully green automated candidate and GitHub Actions CI. **Green CI does not mean third-party web-AI UIs are permanently compatible.**
+V0.6.1 requires a fully green automated candidate and GitHub Actions CI. **Green CI does not mean third-party web-AI UIs are permanently compatible.**
 
-Historical baseline: V0.5.3 live browser testing passed Qianwen's core text input/edit/delete flow and auto-send. A V0.6 capability that has not been retested on the V0.6 candidate remains `UNVERIFIED` rather than inheriting a V0.6 PASS automatically.
+Historical baseline: V0.5.3 live browser testing passed Qianwen's core text input/edit/delete flow and auto-send. A V0.6 / V0.6.1 capability that has not been retested on the candidate remains `UNVERIFIED` rather than inheriting PASS automatically.
 
 See:
 
 - [V0.6 Design](./docs/V0.6-DESIGN.md)
 - [V0.6 Scope Freeze](./docs/V0.6-SCOPE-FREEZE.md)
 - [V0.6 Live Evidence](./docs/V0.6-LIVE-EVIDENCE.md)
+- [V0.6.1 Hardening](./docs/V0.6.1-HARDENING.md)
 - [Changelog](./CHANGELOG.md)
 
 ## Known boundaries
@@ -89,7 +91,7 @@ See:
 - Arbitrary SPA infinite scroll / load-more flows are not a universal guarantee.
 - V0.6 does not automatically understand audio/video content itself; it preserves and hands off the original file.
 - Third-party editors, attachment flows, and send mechanisms can drift. Real blocker/regression fixes are allowed when observed.
-- **V0.6 feature development is frozen; scope is no longer expanded.**
+- **V0.6 feature scope remains frozen; V0.6.1 is restricted to security, correctness, reliability, and state-truth fixes.**
 
 ## License
 
