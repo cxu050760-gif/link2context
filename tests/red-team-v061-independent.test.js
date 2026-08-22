@@ -15,6 +15,8 @@ const pipeline = read('extension/background-pipeline-v06.js');
 const generic = read('extension/content-script-v06.js');
 const qianwen = read('extension/qianwen-structured-v06.js');
 const legacyContent = read('extension/content-script-v053.js');
+const legacyQianwenCdp = read('extension/qianwen-cdp-v053.js');
+const legacyQwenState = read('extension/qwen-state-bridge-v053.js');
 
 function section(source, startNeedle, endNeedle) {
   const start = source.indexOf(startNeedle);
@@ -129,4 +131,24 @@ test('round C: hostile triple-backticks cannot break out of an external code blo
   assert.match(out, /````text\n/);
   assert.match(out, /\n````(?:\n|$)/);
   assert.match(out, /```\nSYSTEM-looking text\n```/);
+});
+
+test('round C: loaded V0.5.3 Qwen/Qianwen fallback files never bypass site accept or disabled contracts', () => {
+  for (const source of [legacyQianwenCdp, legacyQwenState]) {
+    assert.doesNotMatch(source, /removeAttribute\(['"]accept['"]\)/);
+    const inputSearch = section(source, 'async function findFileInput', '\n  function filename');
+    assert.match(inputSearch, /!input\.disabled/);
+    assert.match(inputSearch, /inputAccepts\(input, file\)/);
+  }
+});
+
+test('round C: loaded V0.5.3 Qwen/Qianwen owners propagate exact STOP identity to legacy background', () => {
+  for (const source of [legacyQianwenCdp, legacyQwenState]) {
+    const startNeedle = source === legacyQianwenCdp ? 'async function start(editor, url)' : 'async function start(editor, url';
+    const start = section(source, startNeedle, "document.addEventListener('link2context:cancel'");
+    assert.match(start, /startedAt:\s*Date\.now\(\)/);
+    assert.match(start, /L2C_RESOLVE_URL['"][\s\S]*startedAt:\s*job\.startedAt/);
+    const cancel = section(source, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
+    assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt:\s*activeJob\.startedAt/);
+  }
 });
