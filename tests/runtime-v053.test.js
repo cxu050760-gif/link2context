@@ -204,3 +204,9 @@ test('v053 34: pagination remains bounded', () => {
 test('v053 35: package syntax check includes the current V0.5.3 runtime', () => {
   assert.match(pkg.scripts.check, /content-script-v053\.js/);
 });
+
+test('v053 36: Qwen original binary attachments skip unsafe rich-editor note injection too', () => {
+  const fn = runtime.slice(runtime.indexOf('async function prepareDelivery'), runtime.indexOf('function controlText'));
+  assert.match(fn, /if \(originalBinary\)[\s\S]*qwenSafe: qwenHost/);
+  assert.match(runtime, /if \(!prepared\.qwenSafe && prepared\.note\)/);
+});
