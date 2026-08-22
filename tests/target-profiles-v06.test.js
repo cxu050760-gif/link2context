@@ -17,7 +17,7 @@ test('v0.6 target profiles: known hosts map to dedicated adapters', () => {
 });
 
 test('v0.6 target profiles: CDP remains Qianwen primary and only a bounded auto-send fallback elsewhere', () => {
-  assert.equal(getTargetProfile('qianwen').debugger, 'required-for-current-live-verified-path');
+  assert.equal(getTargetProfile('qianwen').debugger, 'required-for-proven-v053-path');
   assert.equal(getTargetProfile('qianwen').preferredTextStrategy, 'cdp-input-insert-text');
   assert.deepEqual(getTargetProfile('qianwen').sendStrategies, ['cdp-enter']);
 
@@ -31,10 +31,16 @@ test('v0.6 target profiles: CDP remains Qianwen primary and only a bounded auto-
   }
 });
 
-test('v0.6 target profiles: live truth distinguishes verified from planned support', () => {
-  assert.equal(isLiveVerified(getTargetProfile('qianwen'), 'manualText'), true);
-  assert.equal(isLiveVerified(getTargetProfile('qianwen'), 'autoSend'), true);
-  assert.equal(isLiveVerified(getTargetProfile('qianwen'), 'mixedMedia'), false);
+test('v0.6 target profiles: current live truth stays unverified while V0.5.3 Qianwen evidence is preserved as baseline', () => {
+  const qianwen = getTargetProfile('qianwen');
+  assert.equal(isLiveVerified(qianwen, 'manualText'), false);
+  assert.equal(isLiveVerified(qianwen, 'autoSend'), false);
+  assert.equal(isLiveVerified(qianwen, 'mixedMedia'), false);
+  assert.equal(qianwen.live.manualText.status, CAPABILITY_STATUS.UNVERIFIED);
+  assert.equal(qianwen.baseline.version, '0.5.3');
+  assert.equal(qianwen.baseline.manualText, CAPABILITY_STATUS.LIVE_VERIFIED);
+  assert.equal(qianwen.baseline.editableText, CAPABILITY_STATUS.LIVE_VERIFIED);
+  assert.equal(qianwen.baseline.autoSend, CAPABILITY_STATUS.LIVE_VERIFIED);
   assert.equal(isLiveVerified(getTargetProfile('chatgpt'), 'autoSend'), false);
   assert.equal(getTargetProfile('chatgpt').live.autoSend.status, CAPABILITY_STATUS.UNVERIFIED);
 });
