@@ -10,9 +10,11 @@ const source = fs.readFileSync(path.join(root, 'extension/core/rendered-acquisit
 
 test('v0.6 rendered acquisition rechecks browser-context authorization after navigation', () => {
   assert.match(source, /async function requireAuthorizedLocation/);
-  assert.match(source, /await requireAuthorizedLocation\(tab\.url\)/);
-  assert.match(source, /await requireAuthorizedLocation\(current\.href \|\| tab\.url \|\| policy\.target\.href\)/);
+  assert.match(source, /const expectedOrigin = policy\.target\.origin/);
+  assert.match(source, /await requireAuthorizedLocation\(tab\.url, expectedOrigin\)/);
+  assert.match(source, /await requireAuthorizedLocation\(current\.href \|\| tab\.url \|\| policy\.target\.href, expectedOrigin\)/);
   assert.match(source, /BROWSER_CONTEXT_DENIED_FOR_SITE/);
+  assert.match(source, /BROWSER_CONTEXT_CROSS_ORIGIN_NAVIGATION/);
 });
 
 test('v0.6 load-more anchor candidates cannot navigate cross-origin', () => {
