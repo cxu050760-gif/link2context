@@ -150,8 +150,23 @@
         state: extra.state || 'running',
         level: extra.level || '',
         log: extra.log || label,
+        code: extra.code || '',
+        errorStage: extra.errorStage || '',
       });
     } catch { /* diagnostics must never break page handoff */ }
+  }
+
+  function failureLabel(stage) {
+    const labels = {
+      FETCH: '获取失败 / Fetch failed',
+      AUTH: '需要登录或授权 / Authentication required',
+      TYPE: '类型识别失败 / Content type failed',
+      RENDER: '页面正文不可用 / Rendered content unavailable',
+      PARSE: '内容解析失败 / Parse failed',
+      HANDOFF: '页面交付失败 / Page handoff failed',
+      PIPELINE: '处理失败 / Processing failed',
+    };
+    return labels[String(stage || '').toUpperCase()] || labels.PIPELINE;
   }
 
   function base64ToFile(base64, fileName, mime) {
@@ -274,13 +289,18 @@
       chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true }, async (result) => {
         try {
           if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message);
-          if (!result?.ok) throw new Error(result?.error || '链接读取失败 / Failed to read link');
+          if (!result?.ok) {
+            const failure = new Error(result?.error || '链接读取失败 / Failed to read link');
+            failure.l2cStage = result?.errorStage || 'PIPELINE';
+            failure.l2cCode = result?.errorCode || 'PIPELINE_ERROR';
+            throw failure;
+          }
           if (!editor.isConnected) throw new Error('输入框已被页面替换，请重新发送链接 / Composer was replaced');
 
           reportLocalProgress('handoff-received', '后台处理完成，开始交给当前网页 AI / Starting page handoff', `目标 / Target: ${result.targetHost || location.hostname}；方式 / Mode: ${result.handoffMode || (result.kind === 'binary' ? 'attachment' : 'text')}；原因 / Reason: ${result.handoffReason || 'binary-or-default'}`);
 
           if (result.kind === 'binary') {
-            reportLocalProgress('attachment-start', '正在上传附件 / Uploading attachment', `${result.fileName} · ${result.mime || 'application/octet-stream'}`);
+            reportLocalProgress('attachment-start', '正在上传附件 / Uploading attachment', `${result.fileName} · ${result.mime || 'application/octet-stream'} · ${result.resourceKind || 'binary'}`);
             await attachBinary(result, editor);
             reportLocalProgress('attachment-confirmed', '附件已在网页 AI 中登记 / Attachment confirmed', `已确认 / Confirmed: ${result.fileName}`);
             if (!setEditorText(editor, result.note)) throw new Error('无法写入附件说明 / Could not write attachment note');
@@ -298,7 +318,7 @@
             const sent = await submit(editor, job.submitter);
             if (!sent) {
               const detail = '内容已准备好，但未确认网页 AI 已发送；请手动再按一次发送。 / Content is ready, but send could not be confirmed.';
-              reportLocalProgress('send-unconfirmed', '未确认发送 / Send not confirmed', detail, { state: 'error' });
+              reportLocalProgress('send-unconfirmed', '未确认发送 / Send not confirmed', detail, { state: 'error', code: 'SEND_UNCONFIRMED', errorStage: 'HANDOFF' });
               showToast('内容已准备好，但未识别发送按钮；请再按一次发送。', true);
             } else {
               reportLocalProgress('sent', '已完成并发送 / Handoff complete and sent', `目标 / Target: ${result.targetHost || location.hostname}`, { state: 'success' });
@@ -309,7 +329,12 @@
           resolve(true);
         } catch (error) {
           const message = String(error?.message || error);
-          reportLocalProgress('handoff-error', '页面交付失败 / Page handoff failed', message, { state: 'error' });
+          const errorStage = String(error?.l2cStage || 'HANDOFF').toUpperCase();
+          const errorCode = String(error?.l2cCode || 'HANDOFF_ERROR');
+          const detail = `[${errorCode}] ${message}`;
+          reportLocalProgress(`error-${errorStage.toLowerCase()}`, failureLabel(errorStage), detail, {
+            state: 'error', code: errorCode, errorStage,
+          });
           restoreFailedJob(job, message);
           resolve(false);
         } finally {
