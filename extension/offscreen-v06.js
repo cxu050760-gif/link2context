@@ -1,9 +1,21 @@
 const PARSE_MESSAGE = 'L2C_PARSE_HTML_V06';
 const MAX_BLOCKS = 3000;
 const MAX_IMAGES = 120;
+const MAX_BLOCK_TEXT_CHARS = 250_000;
+const MAX_CODE_TEXT_CHARS = 500_000;
+const MAX_LIST_ITEMS = 1000;
+const MAX_TABLE_ROWS = 500;
+const MAX_TABLE_COLUMNS = 80;
+const MAX_TABLE_CELL_CHARS = 20_000;
 
 function cleanText(value) {
   return String(value ?? '').replace(/\r\n?/g, '\n').replace(/[\t\f\v ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function boundedText(value, max, state) {
+  const cleaned = cleanText(value);
+  if (cleaned.length > max) state.truncated = true;
+  return cleaned.slice(0, max);
 }
 
 function safeHttpUrl(value, baseUrl = '') {
@@ -49,7 +61,7 @@ function imageUrl(img, baseUrl) {
 function metaContent(doc, selectors) {
   for (const selector of selectors) {
     const value = doc.querySelector(selector)?.getAttribute('content');
-    if (value && cleanText(value)) return cleanText(value);
+    if (value && cleanText(value)) return cleanText(value).slice(0, 4000);
   }
   return '';
 }
@@ -61,7 +73,7 @@ function publishedTime(doc) {
     'meta[name="date"]',
     'meta[name="pubdate"]',
     'meta[itemprop="datePublished"]',
-  ]) || cleanText(doc.querySelector('time[datetime]')?.getAttribute('datetime'));
+  ]) || cleanText(doc.querySelector('time[datetime]')?.getAttribute('datetime')).slice(0, 1000);
 }
 
 function canonicalUrl(doc, baseUrl) {
@@ -78,24 +90,31 @@ function classLanguage(node) {
   return match?.[1] || '';
 }
 
-function directListItems(node) {
-  return [...node.children]
-    .filter((child) => child.tagName === 'LI')
-    .map((child) => cleanText(child.innerText || child.textContent))
+function directListItems(node, state) {
+  const children = [...node.children].filter((child) => child.tagName === 'LI');
+  if (children.length > MAX_LIST_ITEMS) state.truncated = true;
+  return children.slice(0, MAX_LIST_ITEMS)
+    .map((child) => boundedText(child.innerText || child.textContent, MAX_BLOCK_TEXT_CHARS, state))
     .filter(Boolean);
 }
 
-function tableBlock(node, sourceUrl, page) {
-  const rows = [...node.querySelectorAll('tr')];
-  if (!rows.length) return null;
-  const matrix = rows.map((row) => [...row.querySelectorAll(':scope > th, :scope > td')]
-    .map((cell) => cleanText(cell.innerText || cell.textContent)));
+function tableBlock(node, sourceUrl, page, state) {
+  const allRows = [...node.querySelectorAll('tr')];
+  if (!allRows.length) return null;
+  if (allRows.length > MAX_TABLE_ROWS) state.truncated = true;
+  const rows = allRows.slice(0, MAX_TABLE_ROWS);
+  const matrix = rows.map((row) => {
+    const allCells = [...row.querySelectorAll(':scope > th, :scope > td')];
+    if (allCells.length > MAX_TABLE_COLUMNS) state.truncated = true;
+    return allCells.slice(0, MAX_TABLE_COLUMNS)
+      .map((cell) => boundedText(cell.innerText || cell.textContent, MAX_TABLE_CELL_CHARS, state));
+  });
   if (!matrix.some((row) => row.some(Boolean))) return null;
   const firstHasTh = Boolean(rows[0]?.querySelector(':scope > th'));
   const headers = firstHasTh ? matrix.shift() : [];
   return {
     type: 'table',
-    caption: cleanText(node.querySelector('caption')?.innerText || node.querySelector('caption')?.textContent),
+    caption: boundedText(node.querySelector('caption')?.innerText || node.querySelector('caption')?.textContent, 20_000, state),
     headers,
     rows: matrix,
     provenance: { sourceUrl, page },
@@ -133,53 +152,67 @@ function imageBlock(img, sourceUrl, baseUrl, page, caption = '') {
 function structuredWalk(root, { sourceUrl, baseUrl, page }) {
   const blocks = [];
   const seenImages = new Set();
+  const state = { truncated: false };
   const skip = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'NAV', 'FOOTER', 'ASIDE', 'FORM', 'BUTTON', 'SELECT', 'OPTION']);
 
   const push = (block) => {
-    if (!block || blocks.length >= MAX_BLOCKS) return;
+    if (!block) return;
+    if (blocks.length >= MAX_BLOCKS) {
+      state.truncated = true;
+      return;
+    }
     if (block.type === 'image') {
-      if (!block.src || seenImages.has(block.src) || seenImages.size >= MAX_IMAGES) return;
+      if (!block.src || seenImages.has(block.src)) return;
+      if (seenImages.size >= MAX_IMAGES) {
+        state.truncated = true;
+        return;
+      }
       seenImages.add(block.src);
     }
     blocks.push(block);
   };
 
   const visit = (node) => {
-    if (!(node instanceof Element) || blocks.length >= MAX_BLOCKS || skip.has(node.tagName)) return;
+    if (!(node instanceof Element) || blocks.length >= MAX_BLOCKS || skip.has(node.tagName)) {
+      if (blocks.length >= MAX_BLOCKS) state.truncated = true;
+      return;
+    }
     const tag = node.tagName;
     const provenance = { sourceUrl, page };
 
     if (/^H[1-6]$/.test(tag)) {
-      const value = cleanText(node.innerText || node.textContent);
+      const value = boundedText(node.innerText || node.textContent, MAX_BLOCK_TEXT_CHARS, state);
       if (value) push({ type: 'heading', level: Number(tag.slice(1)), text: value, links: inlineLinks(node, baseUrl), provenance });
       return;
     }
     if (tag === 'P') {
-      const value = cleanText(node.innerText || node.textContent);
+      const value = boundedText(node.innerText || node.textContent, MAX_BLOCK_TEXT_CHARS, state);
       if (value) push({ type: 'paragraph', text: value, links: inlineLinks(node, baseUrl), provenance });
       return;
     }
     if (tag === 'BLOCKQUOTE') {
-      const value = cleanText(node.innerText || node.textContent);
+      const value = boundedText(node.innerText || node.textContent, MAX_BLOCK_TEXT_CHARS, state);
       if (value) push({ type: 'blockquote', text: value, links: inlineLinks(node, baseUrl), provenance });
       return;
     }
     if (tag === 'PRE') {
-      const value = String(node.innerText || node.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
+      const raw = String(node.innerText || node.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
+      if (raw.length > MAX_CODE_TEXT_CHARS) state.truncated = true;
+      const value = raw.slice(0, MAX_CODE_TEXT_CHARS);
       if (value) push({ type: 'code', language: classLanguage(node), text: value, provenance });
       return;
     }
     if (tag === 'TABLE') {
-      push(tableBlock(node, sourceUrl, page));
+      push(tableBlock(node, sourceUrl, page, state));
       return;
     }
     if (tag === 'UL' || tag === 'OL') {
-      const items = directListItems(node);
+      const items = directListItems(node, state);
       if (items.length) push({ type: 'list', ordered: tag === 'OL', items, provenance });
       return;
     }
     if (tag === 'FIGURE') {
-      const caption = cleanText(node.querySelector('figcaption')?.innerText || node.querySelector('figcaption')?.textContent);
+      const caption = boundedText(node.querySelector('figcaption')?.innerText || node.querySelector('figcaption')?.textContent, 20_000, state);
       for (const img of node.querySelectorAll('img')) push(imageBlock(img, sourceUrl, baseUrl, page, caption));
       if (caption && !node.querySelector('img')) push({ type: 'paragraph', text: caption, provenance });
       return;
@@ -198,10 +231,10 @@ function structuredWalk(root, { sourceUrl, baseUrl, page }) {
 
   visit(root);
   if (!blocks.length) {
-    const fallback = cleanText(root.innerText || root.textContent);
+    const fallback = boundedText(root.innerText || root.textContent, MAX_CODE_TEXT_CHARS, state);
     if (fallback) push({ type: 'paragraph', text: fallback, provenance: { sourceUrl, page } });
   }
-  return blocks;
+  return { blocks, truncated: state.truncated };
 }
 
 function chooseSemanticRoot(doc) {
@@ -235,9 +268,9 @@ function parseHtml(html, sourceUrl, page = 1) {
   const readability = parseWithReadability(sourceDoc, baseUrl);
   const workingDoc = readability?.articleDoc || sourceDoc;
   const root = readability ? workingDoc.body : chooseSemanticRoot(workingDoc);
-  const blocks = structuredWalk(root, { sourceUrl: baseUrl, baseUrl, page });
-  const title = cleanText(readability?.parsed?.title || sourceDoc.title || sourceDoc.querySelector('h1')?.textContent);
-  const author = cleanText(readability?.parsed?.byline || metaContent(sourceDoc, ['meta[name="author"]', 'meta[property="article:author"]']));
+  const walked = structuredWalk(root, { sourceUrl: baseUrl, baseUrl, page });
+  const title = cleanText(readability?.parsed?.title || sourceDoc.title || sourceDoc.querySelector('h1')?.textContent).slice(0, 20_000);
+  const author = cleanText(readability?.parsed?.byline || metaContent(sourceDoc, ['meta[name="author"]', 'meta[property="article:author"]'])).slice(0, 4000);
 
   return {
     sourceUrl: baseUrl,
@@ -246,12 +279,13 @@ function parseHtml(html, sourceUrl, page = 1) {
     author,
     publishedAt: publishedTime(sourceDoc),
     language: language(sourceDoc),
-    blocks,
+    blocks: walked.blocks,
     extraction: {
       strategy: readability ? 'mozilla-readability+structured-dom' : 'semantic-dom-fallback',
       readability: Boolean(readability),
-      blockCount: blocks.length,
-      imageCount: blocks.filter((block) => block.type === 'image').length,
+      blockCount: walked.blocks.length,
+      imageCount: walked.blocks.filter((block) => block.type === 'image').length,
+      truncated: walked.truncated,
     },
   };
 }
