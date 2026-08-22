@@ -15,9 +15,9 @@ const manifest = JSON.parse(read('extension/manifest.json'));
 const pkg = JSON.parse(read('package.json'));
 const scripts = manifest.content_scripts?.[0]?.js || [];
 
-test('v053 regression 01: V0.6 package keeps V0.5.3 fallback runtime while version advances', () => {
-  assert.equal(pkg.version, '0.6.0');
-  assert.equal(manifest.version, '0.6.0');
+test('v053 regression 01: V0.6.1 package keeps V0.5.3 fallback runtime while version advances', () => {
+  assert.equal(pkg.version, '0.6.1');
+  assert.equal(manifest.version, '0.6.1');
   assert.ok(scripts.includes('qwen-state-bridge-v053.js'));
   assert.ok(scripts.includes('content-script-v053.js'));
 });
@@ -168,7 +168,7 @@ test('v053 regression 25: pagination remains bounded', () => {
   assert.equal(MAX_PAGINATION_PAGES, 8);
 });
 
-test('v053 regression 26: V0.6 syntax check keeps both V0.5.3 fallback files', () => {
+test('v053 regression 26: V0.6.1 syntax check keeps both V0.5.3 fallback files', () => {
   assert.match(pkg.scripts.check, /qwen-state-bridge-v053\.js/);
   assert.match(pkg.scripts.check, /content-script-v053\.js/);
 });
