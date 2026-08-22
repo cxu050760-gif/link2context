@@ -1,10 +1,14 @@
-import { validatePublicHttpUrl, validateRedirect } from './core/url-safety.js';
+import { validatePublicHttpUrl } from './core/url-safety.js';
 import { resolveSpecialUrl } from './core/workbuddy.js';
-import { decodeBytes, enforceContentLength, MAX_FETCH_BYTES, MAX_REDIRECTS, sniffTextKind, truncateText } from './core/fetch-policy.js';
+import { decodeBytes, sniffTextKind, truncateText } from './core/fetch-policy.js';
+import { fetchBounded, fetchBoundedWithRetry } from './core/fetch-url.js';
+import { htmlToMarkdown } from './core/html-lite.js';
 import { jsonTextToMarkdown, textToMarkdown } from './core/normalize.js';
+import { isKnownAiHost, normalizeHost } from './core/auto-bridge.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { markdown: '', filename: 'context.md' };
+const state = { markdown: '', filename: 'context.md', currentHost: '' };
+const CUSTOM_HOSTS_KEY = 'customAiHosts';
 
 function setStatus(msg, isError = false) {
   $('status').textContent = msg;
@@ -16,57 +20,37 @@ function safeFilename(url, ext = '.md') {
   return base.endsWith(ext) ? base : `${base}${ext}`;
 }
 
-function htmlToMarkdown(html, sourceUrl) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  for (const el of doc.querySelectorAll('script,style,noscript,svg,canvas,template,iframe')) el.remove();
-  const title = (doc.querySelector('title')?.textContent || doc.querySelector('h1')?.textContent || 'Web Page').trim();
-  const main = doc.querySelector('article,main,[role="main"]') || doc.body;
-  const text = (main?.innerText || main?.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
-  return textToMarkdown(text, sourceUrl, title || 'Web Page');
+async function getCustomHosts() {
+  const data = await chrome.storage.local.get(CUSTOM_HOSTS_KEY);
+  return Array.isArray(data[CUSTOM_HOSTS_KEY]) ? data[CUSTOM_HOSTS_KEY].map(normalizeHost) : [];
 }
 
-async function fetchBounded(initialUrl) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
-  try {
-    let current = validatePublicHttpUrl(initialUrl);
-    let res;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-      res = await fetch(current, { redirect: 'manual', credentials: 'omit', cache: 'no-store', signal: controller.signal });
-      if (res.status >= 300 && res.status < 400) {
-        if (hop === MAX_REDIRECTS) throw new Error('Too many redirects / 重定向次数过多');
-        current = validateRedirect(current, res.headers.get('location'));
-        continue;
-      }
-      break;
-    }
-    if (!res?.ok) throw new Error(`HTTP ${res?.status ?? 'unknown'} ${res?.statusText ?? ''}`);
-    enforceContentLength(res.headers.get('content-length'));
-    const reader = res.body?.getReader();
-    if (!reader) {
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.byteLength > MAX_FETCH_BYTES) throw new Error(`Response exceeds ${MAX_FETCH_BYTES} bytes / 响应超过大小上限`);
-      return { res, bytes };
-    }
-    const chunks = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_FETCH_BYTES) {
-        controller.abort();
-        throw new Error(`Response exceeds ${MAX_FETCH_BYTES} bytes / 响应超过大小上限`);
-      }
-      chunks.push(value);
-    }
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
-    return { res, bytes: merged };
-  } finally {
-    clearTimeout(timer);
+async function setCustomHosts(hosts) {
+  await chrome.storage.local.set({ [CUSTOM_HOSTS_KEY]: [...new Set(hosts.map(normalizeHost).filter(Boolean))] });
+}
+
+async function refreshSiteUi() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let host = '';
+  try { host = normalizeHost(new URL(tab?.url || '').hostname); } catch { /* ignore */ }
+  state.currentHost = host;
+  const button = $('toggleSite');
+  if (!host || !/^https?:/i.test(tab?.url || '')) {
+    $('siteStatus').textContent = '当前页面不支持自动模式。 / Current page is not an HTTP(S) site.';
+    button.hidden = true;
+    return;
   }
+  if (isKnownAiHost(host)) {
+    $('siteStatus').textContent = `✅ ${host}：内置自动支持 / Built-in auto support`;
+    button.hidden = true;
+    return;
+  }
+  const custom = await getCustomHosts();
+  const enabled = custom.includes(host);
+  $('siteStatus').textContent = `${enabled ? '✅' : '⚪'} ${host}：${enabled ? '已启用自动模式' : '尚未启用自动模式'}`;
+  button.hidden = false;
+  button.textContent = enabled ? '关闭当前网站自动模式 / Disable' : '启用当前网站自动模式 / Enable';
+  button.dataset.enabled = enabled ? '1' : '0';
 }
 
 async function convert() {
@@ -76,17 +60,16 @@ async function convert() {
     $('save').disabled = true;
     const sourceUrl = validatePublicHttpUrl($('url').value.trim());
     const resolved = resolveSpecialUrl(sourceUrl);
-    const { res, bytes } = await fetchBounded(resolved.fetchUrl);
-    const contentType = res.headers.get('content-type') || '';
+    const { res, bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
     const decoded = decodeBytes(bytes, contentType);
     const type = resolved.kind === 'workbuddy' ? 'json' : sniffTextKind(contentType, decoded);
     if (type === 'binary') throw new Error('This link points to a binary file. Use “Download original”. / 该链接是二进制文件，请使用“下载原文件”。');
     let markdown;
     let inputTruncated = false;
-    if (resolved.kind === 'workbuddy') {
-      markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'workbuddy');
-    } else if (type === 'json') {
-      markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'generic');
+    if (resolved.kind === 'workbuddy') markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'workbuddy');
+    else if (type === 'json') {
+      try { markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'generic'); }
+      catch { markdown = textToMarkdown(decoded, sourceUrl.href, 'Malformed JSON / 非标准 JSON'); }
     } else {
       const limited = truncateText(decoded);
       inputTruncated = limited.truncated;
@@ -101,9 +84,7 @@ async function convert() {
     $('copy').disabled = false;
     $('save').disabled = false;
     setStatus(`完成 / Done · ${Math.round(bytes.byteLength / 1024)} KiB · ${resolved.kind}`);
-  } catch (err) {
-    setStatus(`${err?.message || err}`, true);
-  }
+  } catch (err) { setStatus(`${err?.message || err}`, true); }
 }
 
 async function downloadOriginal() {
@@ -111,25 +92,31 @@ async function downloadOriginal() {
     setStatus('正在安全下载… / Fetching safely…');
     const sourceUrl = validatePublicHttpUrl($('url').value.trim());
     const resolved = resolveSpecialUrl(sourceUrl);
-    const { res, bytes } = await fetchBounded(resolved.fetchUrl);
-    const contentType = res.headers.get('content-type') || 'application/octet-stream';
-    const blob = new Blob([bytes], { type: contentType });
+    const { bytes, contentType } = await fetchBounded(resolved.fetchUrl);
+    const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
     const objectUrl = URL.createObjectURL(blob);
     const rawName = sourceUrl.pathname.split('/').filter(Boolean).pop() || (resolved.kind === 'workbuddy' ? 'conversation-data.json' : 'download.bin');
     const filename = rawName.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 120) || 'download.bin';
     try { await chrome.downloads.download({ url: objectUrl, filename, saveAs: true }); }
     finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
     setStatus('下载完成 / Download ready');
-  } catch (err) {
-    setStatus(`${err?.message || err}`, true);
-  }
+  } catch (err) { setStatus(`${err?.message || err}`, true); }
 }
 
+$('toggleSite').addEventListener('click', async () => {
+  if (!state.currentHost) return;
+  const custom = await getCustomHosts();
+  const next = $('toggleSite').dataset.enabled === '1'
+    ? custom.filter((h) => h !== state.currentHost)
+    : [...custom, state.currentHost];
+  await setCustomHosts(next);
+  await refreshSiteUi();
+});
 $('convert').addEventListener('click', convert);
 $('downloadOriginal').addEventListener('click', downloadOriginal);
 $('copy').addEventListener('click', async () => {
   await navigator.clipboard.writeText(state.markdown);
-  setStatus('已复制，可直接粘贴给网页 AI / Copied; paste into any web AI');
+  setStatus('已复制 / Copied');
 });
 $('save').addEventListener('click', async () => {
   const blob = new Blob([state.markdown], { type: 'text/markdown;charset=utf-8' });
@@ -137,3 +124,5 @@ $('save').addEventListener('click', async () => {
   try { await chrome.downloads.download({ url: objectUrl, filename: state.filename, saveAs: true }); }
   finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
 });
+
+refreshSiteUi().catch(() => {});

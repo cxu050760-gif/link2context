@@ -2,111 +2,86 @@
 
 English | [中文](./README.md)
 
-**Turn links into clean, AI-ready context for web AIs.**
+**Send only a link in a web AI chat. Link2Context fetches the real content locally, converts it, injects it back into the current composer, and continues the send.**
 
-Link2Context is a local browser extension. Instead of requiring ChatGPT, Doubao, Kimi, Claude, Gemini, or another cloud AI to fetch arbitrary remote URLs, it fetches and normalizes content in your browser, then lets you copy Markdown or save/upload the resulting file to any web AI.
+V0.2 is not just a downloader. It is a local link bridge for web AIs such as ChatGPT, Doubao, Kimi, Claude, Gemini, DeepSeek, and Qwen when their own URL-fetch tools cannot read a target.
 
-## What it supports today
+## Normal workflow
 
-- **WorkBuddy share links**: recognizes `https://workbuddy.link/p/...`, resolves the public `conversation-data.json`, extracts conversation text, and omits large image base64, tool arguments, and reasoning payloads.
-- **Regular web pages**: fetches HTML, removes scripts/styles and obvious noise, and wraps extracted text as Markdown context.
-- **JSON / API responses**: parses JSON first and renders readable Markdown, including responses with missing or incorrect `Content-Type` headers.
-- **Plain text / XML / JavaScript**: wraps the response with source metadata.
-- **PDF / images / archives / other binary files**: does not pretend to parse them; it safely downloads the original so it can be uploaded to a web AI.
-- **Legacy text encodings**: honors supported response charsets such as UTF-8, GBK/GB2312, and ISO-8859-1.
+1. Paste one `http://` or `https://` URL into a supported web AI composer.
+2. Press Enter or click Send.
+3. Link2Context intercepts a URL-only message.
+4. The browser extension fetches the target locally.
+5. It normalizes the content into AI-ready context.
+6. It replaces the URL-only draft and continues the send.
 
-## Why this helps web AIs
+No manual download, Markdown conversion, copy, or upload is needed in the normal path.
 
-Cloud AI browsing tools often differ in domain access, response formats, size limits, timeouts, and security policies. Link2Context moves URL retrieval to **your browser**:
+## Built-in web AI support
 
-```text
-URL
- ↓
-Link2Context browser extension (local fetch)
- ↓
-Markdown / original file
- ↓
-ChatGPT / Doubao / Kimi / Claude / Gemini / other web AI
-```
+ChatGPT, Claude, Gemini / Google AI Studio, Grok, Perplexity, DeepSeek, Doubao, Kimi, Qwen / Tongyi, Poe, Microsoft Copilot, Mistral Chat, and OpenRouter are built in.
 
-This avoids depending on any single AI platform's URL-fetch capability.
+For another web AI, open that site, click Link2Context once, and choose **Enable current site**. URL-only chat messages can then use the same automatic path.
+
+## Link types
+
+- **WorkBuddy shares**: resolves `workbuddy.link/p/...` to the underlying `conversation-data.json`, extracts conversation text, and omits image base64, tool arguments, and reasoning payloads.
+- **Regular pages**: extracts readable HTML text and wraps it as Markdown context.
+- **JSON / APIs**: parses the full JSON before rendering AI-readable Markdown and also sniffs mislabeled responses.
+- **Plain text / XML / JavaScript**: wraps content with source metadata.
+- **PDF / images / archives / other binary files**: fetches the file and attempts to attach it to the current web-AI message.
+- **Very long text**: automatically becomes a `.md` attachment instead of overflowing a chat composer.
 
 ## Install (Chrome / Edge)
 
 1. Download or clone this repository.
-2. Open the extension manager:
-   - Chrome: `chrome://extensions`
-   - Edge: `edge://extensions`
+2. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
 3. Enable Developer mode.
 4. Click **Load unpacked**.
-5. **Select the repository's `extension` directory.**
-6. Pin Link2Context and open it when needed.
-
-## Usage
-
-1. Copy an `http://` or `https://` URL.
-2. Open Link2Context.
-3. Paste the URL and click **Convert**.
-4. Text-like content becomes Markdown:
-   - click **Copy** and paste it into any web AI; or
-   - click **Save** and upload the `.md` file.
-5. For PDFs, images, ZIPs, or other binary content, click **Download original** and upload that file to the AI.
-
-## WorkBuddy example
-
-Input:
-
-```text
-https://workbuddy.link/p/fqAaNqzcOZ0DzTS9JZGXsM?ext2=copy_link
-```
-
-The extension resolves it to:
-
-```text
-https://workbuddy-space-static.codebuddy.work/page/fqAaNqzcOZ0DzTS9JZGXsM/0/conversation-data.json
-```
-
-It then produces lightweight conversation Markdown without sending image base64 or bulky tool arguments into AI context.
+5. Select the repository's **`extension` directory**.
+6. Open a supported web AI and send a URL-only message.
 
 ## Security boundaries
 
-V0.1 is intentionally not an unrestricted `curl` proxy. It:
+Because Link2Context can retrieve broad HTTP(S) targets, V0.2 keeps automatic fetches on a user-initiated path:
 
-- allows HTTP(S) only;
-- rejects credential-bearing URLs;
-- blocks localhost, common private/link-local targets, and cloud metadata hosts;
-- **re-validates every redirect destination**;
-- follows at most 5 redirects;
-- caps each fetch at 12 MiB;
-- times out after 25 seconds;
-- redacts likely credential query parameters such as token, api_key, and secret from displayed source URLs;
-- labels fetched content as untrusted data to reduce prompt-injection confusion.
+- HTTP(S) only;
+- credential-bearing URLs rejected;
+- localhost, private/link-local, special-purpose ranges, and cloud metadata blocked;
+- every redirect target revalidated;
+- `targetAddressSpace: public` requested where Chromium supports it;
+- 12 MiB response cap and 25-second default timeout;
+- ordinary web pages cannot directly call the extension;
+- automatic interception requires real trusted browser events;
+- the background re-checks the calling web-AI host;
+- likely secret query parameters are redacted in generated context;
+- fetched text is explicitly marked as untrusted external data.
 
-A browser extension cannot perform the same post-DNS private-network validation as a controlled backend proxy, so V0.1 does not claim complete protection against every DNS-rebinding scenario. Do not expose it as a remotely callable arbitrary-URL proxy.
+See [SECURITY.md](./SECURITY.md).
 
-## Current limitations
+## Compatibility note
 
-- SPAs and heavily JavaScript-rendered pages may return sparse HTML when fetched directly. A future rendered-page mode can address this.
-- PDFs, images, and Office files are downloaded, not OCR'd or converted to Markdown.
-- V0.1 uses copy/save/upload to remain compatible with any web AI; it does **not yet inject content automatically into every AI site's input box**.
-- Responses larger than 12 MiB are rejected.
+“Any URL” does not mean bypassing authentication, CAPTCHAs, DRM, paywalls, or browser/enterprise network policy. V0.2 targets HTTP(S) resources the user's browser is normally allowed to retrieve, so the web AI no longer needs its own generic URL-fetch capability.
 
-## Tests
+Heavily client-rendered SPAs may expose little useful text to a direct GET. Automatic binary upload also depends on the target AI exposing a compatible file input. The popup keeps the manual converter as a fallback.
 
-Requires Node.js 20+:
+## Tests and adversarial review
 
 ```bash
 npm test
 npm run check
 ```
 
-V0.1 includes regression coverage for WorkBuddy parsing, large JSON, URL safety, redirects, malformed timestamps, encodings, and extension packaging.
+On top of the six V0.1 review rounds, V0.2 received **15 adversarial rounds** focused on the zero-touch web-AI path: SSRF variants, redirects, false send success, upload races, rich-text editors, malicious-page abuse, oversized context, and more.
 
-## Adversarial self-review
+See:
 
-At least six adversarial review rounds were performed. Each discovered issue was fixed and covered by regression tests. See:
+- [V0.2 Adversarial Review](./docs/ATTACK-REVIEW-V0.2.md)
+- [References](./docs/REFERENCES.md)
 
-[docs/ATTACK-REVIEW.md](./docs/ATTACK-REVIEW.md)
+## Prior art
+
+Before implementation, V0.2 checked existing GitHub projects and reused architectural ideas from MCP SuperAssistant (web-AI result injection), MarkDownload (browser-side web-to-Markdown), and Defuddle (main-content extraction). **No code from those projects is copied into Link2Context.** This repository remains MIT-licensed.
 
 ## License
 

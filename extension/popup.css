@@ -1,13 +1,17 @@
 :root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color-scheme: light dark; }
-body { width: 430px; margin: 0; }
-main { padding: 14px; }
-h1 { margin: 0 0 2px; font-size: 20px; }
-.sub { margin: 0 0 12px; opacity: .72; }
-label { display: block; margin-bottom: 5px; font-weight: 600; }
-textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 8px; }
-.row { display: flex; gap: 8px; margin-top: 9px; }
-button { flex: 1; padding: 8px 10px; border: 0; border-radius: 7px; cursor: pointer; background: ButtonText; color: ButtonFace; }
-button.secondary { border: 1px solid GrayText; background: transparent; color: inherit; }
-button:disabled { opacity: .45; cursor: default; }
-#status { min-height: 1.4em; margin: 9px 0; font-size: 12px; white-space: pre-wrap; }
-#output { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+body { margin: 0; min-width: 420px; }
+main { padding: 16px; }
+h1 { margin: 0 0 4px; font-size: 20px; }
+.sub,.hint { opacity: .72; }
+.hint { font-size: 12px; line-height: 1.45; }
+label { display:block; margin:12px 0 6px; font-weight:600; }
+textarea { width:100%; box-sizing:border-box; resize:vertical; padding:8px; border-radius:8px; border:1px solid #8887; font:12px/1.45 ui-monospace,Consolas,monospace; }
+.row { display:flex; gap:8px; margin-top:8px; }
+button { border:0; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:600; }
+button:not(.secondary) { background:#2563eb; color:#fff; }
+.secondary { background:#7772; }
+button:disabled { opacity:.45; cursor:not-allowed; }
+#status,#siteStatus { min-height:18px; margin:8px 0; font-size:12px; }
+.auto-box { margin:14px 0; padding:12px; border:1px solid #8885; border-radius:10px; }
+details { border-top:1px solid #8884; padding-top:10px; }
+summary { cursor:pointer; font-weight:600; }
