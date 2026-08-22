@@ -2,9 +2,12 @@
   'use strict';
 
   const STORAGE_KEY = 'handoffPreference';
+  const SEND_STORAGE_KEY = 'sendPreference';
   const MODE_AUTO = 'auto';
   const MODE_DOCUMENT = 'document';
   const MODE_TEXT = 'text';
+  const SEND_MANUAL = 'manual';
+  const SEND_AUTO = 'auto';
   const TEXT_HARD_LIMIT_CHARS = 250_000;
   const BEGIN_MARKER = '--- BEGIN LINK2CONTEXT CONTENT / 内容开始 ---';
   const END_MARKER = '--- END LINK2CONTEXT CONTENT / 内容结束 ---';
@@ -13,6 +16,21 @@
     return [MODE_AUTO, MODE_DOCUMENT, MODE_TEXT].includes(String(value || '').toLowerCase())
       ? String(value).toLowerCase()
       : MODE_AUTO;
+  }
+
+  function normalizeSendMode(value) {
+    return String(value || '').toLowerCase() === SEND_AUTO ? SEND_AUTO : SEND_MANUAL;
+  }
+
+  function attachmentNameHints(fileName) {
+    const name = String(fileName || '').trim();
+    if (!name) return [];
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const hints = [name, stem];
+    if (stem.length >= 12) hints.push(stem.slice(0, Math.min(24, stem.length)));
+    if (stem.length >= 28) hints.push(stem.slice(-16));
+    return [...new Set(hints.filter((item) => item.length >= 8))];
   }
 
   function extractMarkdown(payload) {
@@ -79,13 +97,18 @@
 
   globalThis.Link2ContextDelivery = Object.freeze({
     STORAGE_KEY,
+    SEND_STORAGE_KEY,
     MODE_AUTO,
     MODE_DOCUMENT,
     MODE_TEXT,
+    SEND_MANUAL,
+    SEND_AUTO,
     TEXT_HARD_LIMIT_CHARS,
     BEGIN_MARKER,
     END_MARKER,
     normalizeMode,
+    normalizeSendMode,
+    attachmentNameHints,
     extractMarkdown,
     buildInlinePayload,
     contextFileName,
