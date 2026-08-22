@@ -6,7 +6,8 @@ const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const UI_WORDS = '(?:nav(?:igation)?|menu|sidebar|footer|toolbar|breadcrumb|language|login|sign[-_ ]?in|sign[-_ ]?up|cookie|modal|popover|drawer|masthead)';
 const UI_ATTR_BLOCK = new RegExp(`<([a-z][a-z0-9:-]*)\\b(?=[^>]*(?:id|class)\\s*=\\s*["'][^"']*${UI_WORDS}[^"']*["'])[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
 const PAGE_QUERY_KEY = /^(?:page|p|pg|pn|pageno|pageindex)$/i;
-const NEXT_LABEL = /(?:^|[\s\[（(>›»→:：_-])(?:下一页|下页|后一页|next(?:\s+page)?|older)(?:$|[\s\]）)<›»→:：.!！?？_-])/i;
+const NEXT_LABEL = /(?:^|[\s\[（(>›»→:：_-])(?:下一页|下页|后一页|next(?:\s+page)?|older|load\s+more|加载更多|更多)(?:$|[\s\]）)<›»→:：.!！?？_-])/i;
+const DISABLED_LABEL = /(?:^|\s)(?:disabled|is-disabled|disable)(?:\s|$)/i;
 
 export const MAX_PAGINATION_PAGES = 8;
 
@@ -147,7 +148,7 @@ function safePaginationTarget(currentUrl, href, strongRelNext = false) {
 }
 
 function markupCurrentPage(source) {
-  const current = /<(?:a|span|li|strong|em|b)\b([^>]*(?:aria-current\s*=\s*["']?page|class\s*=\s*["'][^"']*(?:current|active|selected)[^"']*["'])[^>]*)>([\s\S]*?)<\/(?:a|span|li|strong|em|b)\s*>/gi;
+  const current = /<(?:a|span|li|strong|em|b|button)\b([^>]*(?:aria-current\s*=\s*["']?page|class\s*=\s*["'][^"']*(?:current|active|selected)[^"']*["'])[^>]*)>([\s\S]*?)<\/(?:a|span|li|strong|em|b|button)\s*>/gi;
   let match;
   while ((match = current.exec(source))) {
     const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').trim());
@@ -162,6 +163,44 @@ function pushCandidate(map, url, score, reason, pageNumber = null) {
   if (!prior || score > prior.score) map.set(url, { url, score, reason, pageNumber });
 }
 
+function explicitTargetFromAttrs(attrs) {
+  for (const name of ['href', 'data-href', 'data-url', 'data-next-url', 'data-page-url']) {
+    const value = attrValue(attrs, name);
+    if (value && !/^javascript:/i.test(value)) return value;
+  }
+  const onclick = decodeHtmlEntities(attrValue(attrs, 'onclick'));
+  if (onclick) {
+    const match = /(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i.exec(onclick)
+      || /location\.(?:assign|replace)\(\s*['"]([^'"]+)['"]\s*\)/i.exec(onclick);
+    if (match?.[1]) return match[1];
+  }
+  return '';
+}
+
+function pageQueryKey(currentUrl) {
+  try {
+    const url = asUrl(currentUrl);
+    return [...url.searchParams.keys()].find((key) => PAGE_QUERY_KEY.test(key)) || '';
+  } catch { return ''; }
+}
+
+function synthesizePageQuery(currentUrl, pageNumber) {
+  const key = pageQueryKey(currentUrl);
+  if (!key || !Number.isInteger(pageNumber) || pageNumber < 1) return null;
+  try {
+    const next = asUrl(currentUrl);
+    next.searchParams.set(key, String(pageNumber));
+    next.hash = '';
+    return next.href;
+  } catch { return null; }
+}
+
+function elementDisabled(attrs) {
+  return /\bdisabled\b/i.test(attrs || '')
+    || String(attrValue(attrs, 'aria-disabled')).toLowerCase() === 'true'
+    || DISABLED_LABEL.test(`${attrValue(attrs, 'class')} ${attrValue(attrs, 'id')}`);
+}
+
 export function discoverNextPage(html, currentUrl) {
   const source = String(html || '');
   const candidates = new Map();
@@ -172,32 +211,38 @@ export function discoverNextPage(html, currentUrl) {
     const attrs = match[1] || '';
     const rel = attrValue(attrs, 'rel');
     if (!/(?:^|\s)next(?:\s|$)/i.test(rel)) continue;
-    const target = safePaginationTarget(currentUrl, attrValue(attrs, 'href'), true);
+    const target = safePaginationTarget(currentUrl, explicitTargetFromAttrs(attrs), true);
     pushCandidate(candidates, target, 140, 'link-rel-next', pageNumberFromUrl(target));
   }
 
   const numeric = [];
-  const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
-  while ((match = anchorRe.exec(source)) && candidates.size < 800) {
-    const attrs = match[1] || '';
-    const href = attrValue(attrs, 'href');
-    if (!href) continue;
+  const controlRe = /<(a|button|span|li)\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
+  while ((match = controlRe.exec(source)) && candidates.size < 800) {
+    const tag = String(match[1] || '').toLowerCase();
+    const attrs = match[2] || '';
+    if (elementDisabled(attrs)) continue;
     const rel = attrValue(attrs, 'rel');
-    const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const text = decodeHtmlEntities(match[3].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
     const aria = decodeHtmlEntities(attrValue(attrs, 'aria-label'));
     const title = decodeHtmlEntities(attrValue(attrs, 'title'));
     const classId = `${attrValue(attrs, 'class')} ${attrValue(attrs, 'id')}`;
     const label = `${text} ${aria} ${title}`.trim();
     const strongRelNext = /(?:^|\s)next(?:\s|$)/i.test(rel);
-    const semanticNext = NEXT_LABEL.test(` ${label} `) || /(?:^|[-_\s])(next|pager-next|pagination-next)(?:$|[-_\s])/i.test(classId);
-    const target = safePaginationTarget(currentUrl, href, strongRelNext);
-    if (!target) continue;
-    if (strongRelNext) pushCandidate(candidates, target, 130, 'anchor-rel-next', pageNumberFromUrl(target));
-    else if (semanticNext) pushCandidate(candidates, target, 110, 'semantic-next', pageNumberFromUrl(target));
+    const semanticNext = NEXT_LABEL.test(` ${label} `)
+      || /(?:^|[-_\s])(next|pager-next|pagination-next|load-more)(?:$|[-_\s])/i.test(classId);
+
+    const declaredPage = Number(attrValue(attrs, 'data-page') || attrValue(attrs, 'data-page-number') || attrValue(attrs, 'data-pageno'));
+    let href = explicitTargetFromAttrs(attrs);
+    if (!href && Number.isInteger(declaredPage) && declaredPage > 0) href = synthesizePageQuery(currentUrl, declaredPage) || '';
+    const target = href ? safePaginationTarget(currentUrl, href, strongRelNext || semanticNext) : null;
+
+    if (strongRelNext) pushCandidate(candidates, target, 130, 'control-rel-next', pageNumberFromUrl(target));
+    else if (semanticNext && target) pushCandidate(candidates, target, tag === 'a' ? 110 : 105, tag === 'a' ? 'semantic-next' : 'data-semantic-next', pageNumberFromUrl(target));
 
     if (/^\d{1,4}$/.test(text)) {
       const pageNumber = Number(text);
-      if (pageNumber > 0) numeric.push({ url: target, pageNumber, family: pageFamily(target) });
+      const numericTarget = target || synthesizePageQuery(currentUrl, pageNumber);
+      if (pageNumber > 0 && numericTarget) numeric.push({ url: numericTarget, pageNumber, family: pageFamily(numericTarget) });
     }
   }
 
