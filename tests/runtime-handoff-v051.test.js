@@ -70,7 +70,7 @@ test('attack 09: runtime reads send preference from extension storage and fails 
   assert.match(content, /return 'manual';/);
 });
 
-test('attack 10: merely pasting a URL never opts the job into automatic submission', () => {
+test('attack 10: legacy V0.5.1 paste path still prepares only; V0.5.2 adds the independent reliability auto-send layer', () => {
   assert.match(content, /Paste only starts preparation\. It never sends immediately/);
   assert.match(content, /startJob\(editor, url\);/);
 });
@@ -119,11 +119,11 @@ test('attack 18: manual completion is reported as success instead of a false sen
   assert.match(content, /\{ state: 'success' \}/);
 });
 
-test('attack 19: package and extension manifest expose the same V0.5.1 revision', () => {
+test('attack 19: package and extension manifest expose the same V0.5.2 revision', () => {
   const pkg = JSON.parse(read('package.json'));
   const manifest = JSON.parse(read('extension/manifest.json'));
-  assert.equal(pkg.version, '0.5.1');
-  assert.equal(manifest.version, '0.5.1');
+  assert.equal(pkg.version, '0.5.2');
+  assert.equal(manifest.version, '0.5.2');
 });
 
 test('attack 20: handoff format and send behavior remain orthogonal settings', () => {
