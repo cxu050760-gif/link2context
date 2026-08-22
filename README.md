@@ -4,7 +4,7 @@
 
 **在网页 AI 里只给一个链接，Link2Context 尽可能完整地读取真实信息，保留结构、关键图片与原文件，再按当前 AI 能接收的方式交过去。读不全、传不全或尚未验证的部分会明确暴露，不静默丢失。**
 
-> 当前版本：**V0.6.0 — Structured Context Bridge（结构化上下文桥）**。V0.6 已完成代码收口并冻结功能开发；真实第三方网页能力与代码完成状态分开记录，详见 `docs/V0.6-LIVE-EVIDENCE.md`。
+> 当前版本：**V0.6.1 — Structured Context Bridge（结构化上下文桥）安全/可靠性补丁**。V0.6 功能范围继续冻结；V0.6.1 只做对抗加固与回归修复。真实第三方网页能力与代码完成状态分开记录，详见 `docs/V0.6-LIVE-EVIDENCE.md`。
 
 ## V0.6 的核心变化
 
@@ -16,6 +16,7 @@
 - **旧编码更稳**：BOM → HTTP charset → HTML/XML 声明 → UTF-8 合法性 → 有界回退，并记录编码来源/置信度。
 - **按目标 AI 交付**：ChatGPT、DeepSeek、豆包、千问拥有独立 Target Profile（目标 AI 能力画像）；手动交付与 Auto-send（自动发送）分开，未有真实证据的能力保持 `UNVERIFIED`。
 - **保留已验证能力**：千问继续使用 V0.5.3 已实测的 CDP `Input.insertText` + 真实 Enter；PDF、图片、Office、压缩包、音视频和未知二进制继续保持原文件附件。
+- **V0.6.1 对抗加固**：围绕网络地址空间、重定向、调试器 TOCTOU、STOP 任务身份、附件入口隔离、partial 状态传播、分页身份、URL 密钥脱敏、解析资源上限等完成 20 轮核心攻击，并继续补了 HTTPS 调试器约束与 CDP 失败分类。
 
 ## 使用方式
 
@@ -43,14 +44,14 @@ URL/resource
 
 - 只接受 HTTP / HTTPS，拒绝 URL 内嵌账号密码；
 - 阻止 localhost、私网、链路本地、特殊用途 IP 和云 metadata（元数据）目标；
-- 网络重定向重新校验；授权渲染页面导航后也重新检查授权与 host deny-list（站点禁用列表）；
-- “加载更多”自动化有次数边界，跨源链接不会被自动点击；
+- 网络重定向重新校验；授权渲染页面导航后也重新检查授权、host deny-list（站点禁用列表）和初始 origin（来源域）；
+- “加载更多”自动化有次数边界，跨源链接、form / submit 控件不会被自动点击；
 - 普通抓取默认无登录态；Authorized Browser Context 必须用户显式授权，可撤销、可按 host 禁用；
 - 不用 `chrome.cookies` 直接读取 Cookie 值；不绕过登录、验证码、付费墙、DRM；
 - 外部正文统一标记为 `untrusted-external`（不可信外部数据）；
-- 附件严格尊重网站 `<input type="file" accept=...>`，没有兼容入口就明确失败，不强行解除限制；
+- 附件严格尊重网站 `<input type="file" accept=...>`，没有兼容入口时明确失败，不强行解除限制；附件确认限制在当前 composer（输入区）范围，避免页面其他文字造成假成功；
 - 不强制启用 `disabled / aria-disabled` 控件；
-- `debugger` 不是通用浏览器控制接口：千问仅固定输入动作；其他目标只允许显式 Auto-send 下的受限 Enter fallback（回退）；
+- `debugger` 不是通用浏览器控制接口：千问仅在受支持的 HTTPS 域名开放固定输入动作；其他目标只允许显式 Auto-send 下、固定 HTTPS AI host 的受限 Enter fallback（回退）；
 - 自动发送必须取得独立发送后证据，否则返回 `SEND_UNCONFIRMED`。
 
 详见 [SECURITY.md](./SECURITY.md)。
@@ -77,15 +78,16 @@ npm test
 npm run check
 ```
 
-V0.6 发布候选要求全量自动化和 GitHub Actions CI（持续集成）全绿，并单独维护真实浏览器 evidence（证据）。**CI 通过不等于第三方网页 AI 永久兼容。**
+V0.6.1 发布候选要求全量自动化和 GitHub Actions CI（持续集成）全绿，并单独维护真实浏览器 evidence（证据）。**CI 通过不等于第三方网页 AI 永久兼容。**
 
-已知历史基线：V0.5.3 的 `www.qianwen.com` 核心文本输入/编辑删除及自动发送曾完成真实浏览器 PASS。V0.6 没有重新实测的能力不会继承为 V0.6 PASS，而是继续保持 `UNVERIFIED`。
+已知历史基线：V0.5.3 的 `www.qianwen.com` 核心文本输入/编辑删除及自动发送曾完成真实浏览器 PASS。V0.6 / V0.6.1 没有重新实测的能力不会继承为 PASS，而是继续保持 `UNVERIFIED`。
 
 详见：
 
 - [V0.6 Design / 设计](./docs/V0.6-DESIGN.md)
 - [V0.6 Scope Freeze / 范围冻结](./docs/V0.6-SCOPE-FREEZE.md)
 - [V0.6 Live Evidence / 真实浏览器证据](./docs/V0.6-LIVE-EVIDENCE.md)
+- [V0.6.1 Hardening / 对抗加固记录](./docs/V0.6.1-HARDENING.md)
 - [Changelog / 更新记录](./CHANGELOG.md)
 
 ## 已知边界
@@ -93,7 +95,7 @@ V0.6 发布候选要求全量自动化和 GitHub Actions CI（持续集成）全
 - 不承诺任意 SPA 无限滚动 / “加载更多”全网通吃；
 - 本版不会自动理解音视频内容本身，而是保留/交付原文件；
 - 第三方网页 AI 的 DOM、编辑器、附件和发送机制会变化；真实 blocker/regression（阻断/回归）允许定向修复；
-- **V0.6 功能开发已冻结，不再继续扩 scope（范围）。**
+- **V0.6 功能范围继续冻结；V0.6.1 只允许安全、正确性、可靠性和真实性修复，不扩 scope（范围）。**
 
 ## License
 
