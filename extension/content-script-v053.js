@@ -279,7 +279,7 @@
         reason: result.handoffReason || 'original-binary',
         file: base64ToFile(result.base64, result.fileName, result.mime),
         note: result.note || '',
-        qwenSafe: false,
+        qwenSafe: qwenHost,
       };
     }
 
