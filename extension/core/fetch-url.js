@@ -87,15 +87,24 @@ export async function fetchBounded(initialUrl, {
   maxRedirects = MAX_REDIRECTS,
   targetAddressSpace = STRICT_TARGET_ADDRESS_SPACE,
   requireHttps = false,
+  signal = null,
 } = {}) {
   if (typeof fetchFn !== 'function') throw new FetchFailure('FETCH_UNAVAILABLE', 'Fetch API unavailable / Fetch API 不可用');
   const controller = new AbortController();
+  let externallyAborted = Boolean(signal?.aborted);
+  const onExternalAbort = () => {
+    externallyAborted = true;
+    try { controller.abort(signal?.reason); } catch { controller.abort(); }
+  };
+  if (signal?.aborted) onExternalAbort();
+  else signal?.addEventListener?.('abort', onExternalAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     let current = validatePublicHttpUrl(initialUrl);
     enforceHttps(current, requireHttps);
     let res;
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      if (signal?.aborted) onExternalAbort();
       res = await fetchFn(current.href, fetchInit(controller, targetAddressSpace));
       if (res?.type === 'opaqueredirect' && res.status === 0) {
         throw new FetchFailure('REDIRECT_BLOCKED', 'Redirect target is hidden by the browser; refusing unsafe follow / 浏览器隐藏了重定向目标，已安全拒绝');
@@ -144,11 +153,15 @@ export async function fetchBounded(initialUrl, {
     };
   } catch (error) {
     if (error?.name === 'AbortError') {
+      if (externallyAborted || signal?.aborted) {
+        throw new FetchFailure('USER_CANCELLED', 'Cancelled by user / 用户已停止当前 Link2Context 任务', { stage: 'PIPELINE', cause: error });
+      }
       throw new FetchFailure('FETCH_TIMEOUT', `Fetch timed out after ${timeoutMs} ms / 抓取超时（${timeoutMs} ms）`, { cause: error });
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener?.('abort', onExternalAbort);
   }
 }
 
@@ -166,6 +179,22 @@ function emitProgress(onProgress, payload) {
   try { onProgress?.(payload); } catch { /* progress reporting must never break fetch */ }
 }
 
+function abortableDelay(ms, signal) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(new FetchFailure('USER_CANCELLED', 'Cancelled by user / 用户已停止当前 Link2Context 任务', { stage: 'PIPELINE' }));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new FetchFailure('USER_CANCELLED', 'Cancelled by user / 用户已停止当前 Link2Context 任务', { stage: 'PIPELINE' }));
+    };
+    signal.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
 async function retrySeries(initialUrl, options, attempts, onProgress) {
   let lastError;
   for (let i = 0; i < attempts; i += 1) {
@@ -180,7 +209,7 @@ async function retrySeries(initialUrl, options, attempts, onProgress) {
         code: info.code,
         detail: `第 ${i + 1} 次直接抓取失败 [${info.code}]：${info.message}；准备第 ${i + 2}/${attempts} 次。`,
       });
-      await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
+      await abortableDelay(250 * (i + 1), options.signal);
     }
   }
   throw lastError;
