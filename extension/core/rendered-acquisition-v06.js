@@ -26,6 +26,20 @@ async function authorizationFor(url) {
   };
 }
 
+function authorizationError(policy) {
+  const error = new Error(policy.deniedBy
+    ? `Browser context is disabled for ${policy.deniedBy} / 已禁止该站点使用浏览器上下文`
+    : 'Authorized browser context is required for rendered acquisition / 渲染采集需要先授权浏览器上下文');
+  error.code = policy.deniedBy ? 'BROWSER_CONTEXT_DENIED_FOR_SITE' : 'BROWSER_CONTEXT_AUTHORIZATION_REQUIRED';
+  return error;
+}
+
+async function requireAuthorizedLocation(url) {
+  const policy = await authorizationFor(url);
+  if (!policy.enabled) throw authorizationError(policy);
+  return policy.target;
+}
+
 function cancelled(signal) {
   if (!signal?.aborted) return;
   const error = new Error('Cancelled by user / 用户已停止当前 Link2Context 任务');
@@ -108,7 +122,17 @@ async function advanceRenderedPage(tabId, { allowLoadMore, allowScroll }) {
         const scope = document.querySelector('article,main,[role="main"]') || document.body;
         const controls = [...scope.querySelectorAll('button,[role="button"],a')].filter(isVisible);
         const re = /^(?:load\s+more|show\s+more|read\s+more|continue\s+reading|加载更多|查看更多|展开全文|继续阅读|显示更多)$/i;
-        const target = controls.find((el) => re.test(String(el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()));
+        const target = controls.find((el) => {
+          const value = String(el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+          if (!re.test(value)) return false;
+          if (el.tagName === 'A') {
+            try {
+              const destination = new URL(el.getAttribute('href') || '', location.href);
+              if (destination.origin !== location.origin) return false;
+            } catch { return false; }
+          }
+          return true;
+        });
         if (target) {
           label = String(target.innerText || target.textContent || target.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
           target.click();
@@ -151,13 +175,7 @@ export async function acquireRenderedHtml(url, {
   onProgress = null,
 } = {}) {
   const policy = await authorizationFor(url);
-  if (!policy.enabled) {
-    const error = new Error(policy.deniedBy
-      ? `Browser context is disabled for ${policy.deniedBy} / 已禁止该站点使用浏览器上下文`
-      : 'Authorized browser context is required for rendered acquisition / 渲染采集需要先授权浏览器上下文');
-    error.code = policy.deniedBy ? 'BROWSER_CONTEXT_DENIED_FOR_SITE' : 'BROWSER_CONTEXT_AUTHORIZATION_REQUIRED';
-    throw error;
-  }
+  if (!policy.enabled) throw authorizationError(policy);
 
   const options = { url: policy.target.href, active: false };
   if (Number.isInteger(windowId)) options.windowId = windowId;
@@ -174,7 +192,7 @@ export async function acquireRenderedHtml(url, {
     while (Date.now() - started < timeoutMs) {
       cancelled(signal);
       const tab = await chrome.tabs.get(tabId);
-      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) validatePublicHttpUrl(tab.url);
+      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) await requireAuthorizedLocation(tab.url);
       if (tab?.status !== 'complete') {
         await wait(220, signal);
         continue;
@@ -185,7 +203,7 @@ export async function acquireRenderedHtml(url, {
         await wait(250, signal);
         continue;
       }
-      validatePublicHttpUrl(current.href || tab.url || policy.target.href);
+      await requireAuthorizedLocation(current.href || tab.url || policy.target.href);
       if (looksLikeGate(current.bodyPreview)) {
         const error = new Error('Rendered page is still an access gate / 渲染页面仍是登录、验证或访问门槛');
         error.code = 'BROWSER_CONTEXT_ACCESS_GATE';
