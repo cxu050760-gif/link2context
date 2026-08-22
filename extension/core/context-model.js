@@ -210,6 +210,12 @@ function renderInlineLinks(links = []) {
   return rendered ? `\n\nLinks / 链接: ${rendered}` : '';
 }
 
+function codeFenceFor(value) {
+  let longest = 0;
+  for (const run of String(value ?? '').match(/`+/g) || []) longest = Math.max(longest, run.length);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
 function renderBlock(block) {
   if (block.type === 'heading') return `${'#'.repeat(block.level)} ${escapeTrustBoundary(block.text)}${renderInlineLinks(block.links)}`.trim();
   if (block.type === 'paragraph') return `${escapeTrustBoundary(block.text)}${renderInlineLinks(block.links)}`.trim();
@@ -218,7 +224,11 @@ function renderBlock(block) {
     return `${quote}${renderInlineLinks(block.links)}`.trim();
   }
   if (block.type === 'list') return block.items.map((item, i) => `${block.ordered ? `${i + 1}.` : '-'} ${escapeTrustBoundary(item)}`).join('\n');
-  if (block.type === 'code') return `\`\`\`${block.language}\n${escapeTrustBoundary(block.text)}\n\`\`\``;
+  if (block.type === 'code') {
+    const externalCode = escapeTrustBoundary(block.text);
+    const fence = codeFenceFor(externalCode);
+    return `${fence}${block.language}\n${externalCode}\n${fence}`;
+  }
   if (block.type === 'table') return renderTable(block);
   if (block.type === 'image') {
     const label = escapeTrustBoundary(block.alt || block.caption || 'image');
