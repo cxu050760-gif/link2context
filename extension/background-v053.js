@@ -89,6 +89,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === QIANWEN_DEBUGGER_MESSAGE) {
     (async () => {
+      if (message.userGesture !== true) {
+        return { ok: false, errorCode: 'QIANWEN_DEBUGGER_GESTURE_REQUIRED', error: 'A real user gesture is required / 必须由真实用户操作触发千问调试输入' };
+      }
       if (sender?.frameId > 0) {
         return { ok: false, errorCode: 'QIANWEN_DEBUGGER_FRAME_DENIED', error: 'Only the top frame may use Qianwen debugger input / 仅顶层千问页面可调用调试输入' };
       }
@@ -107,6 +110,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === TARGET_DEBUGGER_MESSAGE) {
     (async () => {
+      if (message.userGesture !== true) return { ok: false, errorCode: 'TARGET_DEBUGGER_GESTURE_REQUIRED', error: 'A real user gesture is required / 调试器发送回退必须由真实用户操作触发' };
       if (sender?.frameId > 0) return { ok: false, errorCode: 'TARGET_DEBUGGER_FRAME_DENIED', error: 'Only top frame auto-send fallback is allowed / 仅顶层页面可使用自动发送回退' };
       if (message.action !== 'pressEnter') return { ok: false, errorCode: 'TARGET_DEBUGGER_ACTION_DENIED', error: 'Only Enter is exposed for V0.6 target fallback / V0.6 目标回退仅允许 Enter' };
       const host = senderHost(sender);
