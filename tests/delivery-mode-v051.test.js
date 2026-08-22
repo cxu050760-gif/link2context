@@ -82,12 +82,13 @@ test('attachment filename hints include a truncated-chip-safe distinctive prefix
   assert.ok(hints.includes(stem.slice(0, 24)));
 });
 
-test('manifest loads the single V0.5.3 handoff runtime after progress and delivery policy', () => {
+test('manifest loads V0.5.3 policy, Qwen state adapter, then generic runtime without legacy stacked runtimes', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const scripts = manifest.content_scripts[0].js;
-  assert.deepEqual(scripts, ['progress-ui.js', 'delivery-mode.js', 'content-script-v053.js']);
+  assert.equal(scripts[0], 'progress-ui.js');
   assert.ok(scripts.indexOf('progress-ui.js') < scripts.indexOf('delivery-mode.js'));
-  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('content-script-v053.js'));
+  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('qwen-state-bridge-v053.js'));
+  assert.ok(scripts.indexOf('qwen-state-bridge-v053.js') < scripts.indexOf('content-script-v053.js'));
   assert.ok(!scripts.includes('handoff-reliability-v052.js'));
   assert.ok(!scripts.includes('content-script-v051.js'));
 });
