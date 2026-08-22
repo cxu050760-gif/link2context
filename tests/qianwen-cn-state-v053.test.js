@@ -65,7 +65,7 @@ test('qianwen-cn 06: pasted URL is intercepted once and failed CDP state is fail
   assert.match(bridge, /stopImmediatePropagation/);
   assert.match(bridge, /QIANWEN_CDP_STATE_UNCONFIRMED/);
   assert.match(background, /another debugger\|already attached/);
-  assert.match(background, /\$\{failurePrefix\}_BUSY/);
+  assert.match(background, /String\(failurePrefix\) \+ '_BUSY'/);
 });
 
 test('qianwen-cn 07: V0.6 keeps the proven Qianwen CDP binary/text fallback while the package version advances', () => {
