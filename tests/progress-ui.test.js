@@ -39,16 +39,20 @@ test('closing the panel suppresses the current job until a new start arrives', (
   assert.match(ui, /suppressedStartedAt = 0/);
 });
 
-test('background reports important fetch, fallback and parsing stages', () => {
+test('background reports fetch, fallback, classification and typed terminal stages', () => {
   const background = read('extension/background.js');
   for (const stage of [
-    'direct-fetch', 'direct-retry', 'compatibility-retry', 'direct-failed',
+    'direct-fetch', 'direct-retry', 'compatibility-retry',
     'fallback-open', 'fallback-wait', 'fallback-extract', 'fallback-extracted',
     'resolve-chatgpt', 'chatgpt-fallback-open', 'chatgpt-fallback-extract',
-    'normalize', 'prepare-output', 'ready', 'error',
+    'classify-resource', 'normalize', 'prepare-output', 'ready',
   ]) {
     assert.match(background, new RegExp(`['"]${stage}['"]`));
   }
+  assert.match(background, /classifyFetchFailure/);
+  assert.match(background, /stageLabel\(info\.stage\)/);
+  assert.match(background, /code: info\.code/);
+  assert.match(background, /errorStage: info\.stage/);
   assert.match(background, /chrome\.tabs\.sendMessage/);
 });
 
