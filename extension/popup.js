@@ -86,8 +86,8 @@ async function saveHandoffPreference() {
 }
 
 function sendHint(mode) {
-  if (mode === 'auto') return '自动发送：只有当你原本按 Enter 或点击发送来提交那个链接时，处理成功后才会自动继续发送；单纯粘贴链接不会立即发出去。';
-  return '手动确认：Link2Context 先把文档或长文本准备好并停在输入框里，你检查后再点一次发送。适合测试，也避免误发。';
+  if (mode === 'auto') return '自动发送：无论你是粘贴链接、按 Enter 还是点击发送，Link2Context 都会先完成抓取与交付，确认当前网页 AI 的发送控件可用后再自动发送；不会强行启用灰色按钮。';
+  return '手动确认：无论你是粘贴、按 Enter 还是点击发送，Link2Context 都只把文档或长文本准备好并停在输入框里，你检查后再发送。';
 }
 
 async function refreshSendPreferenceUi() {
