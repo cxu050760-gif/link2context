@@ -10,7 +10,6 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const helper = read('extension/handoff-reliability-v052.js');
 const manifest = JSON.parse(read('extension/manifest.json'));
 const pkg = JSON.parse(read('package.json'));
-
 const contentScripts = manifest.content_scripts?.[0]?.js || [];
 
 test('attack 01: reliability helper is loaded before the legacy V0.5.1 handoff runtime', () => {
@@ -25,9 +24,9 @@ test('attack 02: paste auto-send is opt-in through persisted sendPreference', ()
 });
 
 test('attack 03: a paste-triggered job is tracked without directly swallowing the trusted paste event', () => {
-  assert.match(helper, /document\.addEventListener\('paste'/);
-  assert.match(helper, /pendingPaste\.push/);
-  assert.doesNotMatch(helper, /document\.addEventListener\('paste'[\s\S]*stopImmediatePropagation/);
+  const listener = helper.slice(helper.indexOf("document.addEventListener('paste'"), helper.indexOf("document.addEventListener('click'"));
+  assert.match(listener, /pendingPaste\.push/);
+  assert.doesNotMatch(listener, /stopImmediatePropagation/);
 });
 
 test('attack 04: reliable submit never force-enables disabled controls', () => {
@@ -36,9 +35,10 @@ test('attack 04: reliable submit never force-enables disabled controls', () => {
   assert.match(helper, /aria-disabled/);
 });
 
-test('attack 05: send success requires page evidence instead of button-click success alone', () => {
+test('attack 05: send success requires independent page evidence, not button-click success alone', () => {
   assert.match(helper, /function submitEvidence/);
-  assert.match(helper, /composerChanged && \(messageVisible \|\| generatingEvidence\(\)\)/);
+  assert.match(helper, /messageVisibleOutsideComposer/);
+  assert.match(helper, /composerCleared && generatingEvidence\(\)/);
 });
 
 test('attack 06: a legacy send-unconfirmed result can be corrected only after independent evidence', () => {
@@ -102,9 +102,10 @@ test('attack 16: mutation tracking also handles text changes inside an existing 
   assert.match(helper, /record\.type === 'characterData'/);
 });
 
-test('attack 17: auto-send waits for a currently enabled visible send control instead of forcing stale submitters', () => {
+test('attack 17: auto-send re-resolves a rerendered composer while waiting for an enabled send control', () => {
   assert.match(helper, /enabledSendButton/);
   assert.match(helper, /for \(let i = 0; !button && i < 16/);
+  assert.match(helper, /editor = newestComposer\(editor\)/);
 });
 
 test('attack 18: package and manifest are both V0.5.2', () => {
@@ -119,4 +120,55 @@ test('attack 19: package check includes the V0.5.2 reliability helper', () => {
 test('attack 20: V0.5.2 remains an additive reliability layer and keeps the established V0.5.1 runtime loaded', () => {
   assert.ok(contentScripts.includes('content-script-v051.js'));
   assert.ok(contentScripts.includes('handoff-reliability-v052.js'));
+});
+
+test('attack 21: mirrored attachment proof expires and cannot poison a later upload with the same filename', () => {
+  assert.match(helper, /ATTACHMENT_PROOF_TTL_MS/);
+  assert.match(helper, /setTimeout\(\(\) => marker\.remove\(\), ATTACHMENT_PROOF_TTL_MS\)/);
+});
+
+test('attack 22: synthetic input and change events for the same adapted file are coalesced', () => {
+  assert.match(helper, /item\.originalName === original\.name \|\| item\.actualName === original\.name/);
+  assert.match(helper, /if \(alreadyTracked\) return/);
+});
+
+test('attack 23: Qwen accept widening guarantees both Markdown and plain-text fallback rules', () => {
+  assert.match(helper, /\['\.md', 'text\/markdown', '\.txt', 'text\/plain'\]/);
+  assert.match(helper, /rules\.some/);
+});
+
+test('attack 24: stale send snapshots cannot later manufacture a success', () => {
+  assert.match(helper, /SUBMIT_EVIDENCE_TTL_MS/);
+  assert.match(helper, /Date\.now\(\) - snapshot\.startedAt > SUBMIT_EVIDENCE_TTL_MS/);
+});
+
+test('attack 25: a global stop-generating button is insufficient unless the composer was actually cleared', () => {
+  assert.match(helper, /composerCleared && generatingEvidence\(\)/);
+  assert.doesNotMatch(helper, /composerChanged && \(messageVisible \|\| generatingEvidence/);
+});
+
+test('attack 26: failed paste auto-send is surfaced instead of silently pretending manual mode was intended', () => {
+  assert.match(helper, /Paste auto-send was not confirmed/);
+  assert.match(helper, /code: 'SEND_UNCONFIRMED'/);
+  assert.match(helper, /自动发送未确认/);
+});
+
+test('attack 27: a paste can auto-send only after the handoff lifecycle actually started', () => {
+  assert.match(helper, /stage === 'handoff-received'/);
+  assert.match(helper, /handoffStarted = true/);
+  assert.match(helper, /latestPendingPaste\(\{ requireStarted: true \}\)/);
+});
+
+test('attack 28: failed handoff consumes the active paste so it cannot be reused by a later unrelated success', () => {
+  assert.match(helper, /stage\.startsWith\('error-'\)/);
+  assert.match(helper, /consumeActivePasteOnError/);
+});
+
+test('attack 29: trusted manual send clicks do not overwrite the snapshot used for auto-send recovery', () => {
+  const listener = helper.slice(helper.indexOf("document.addEventListener('click'"), helper.indexOf("document.addEventListener('keydown'"));
+  assert.match(listener, /event\.isTrusted \|\| !looksLikeSend/);
+});
+
+test('attack 30: slow but valid fetches have a bounded paste lifecycle instead of a tiny race window', () => {
+  assert.match(helper, /PENDING_PASTE_TTL_MS = 120_000/);
 });
