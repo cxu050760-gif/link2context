@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Link2Context",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Paste a link into a web AI and Link2Context automatically fetches and injects the real content. / 在网页 AI 中只发链接，自动读取并注入真实内容。",
   "permissions": ["downloads", "clipboardWrite", "storage", "activeTab"],
   "host_permissions": ["http://*/*", "https://*/*"],
