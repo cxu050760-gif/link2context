@@ -37,8 +37,8 @@ V0.6 从“把链接转成一段文本”升级为 **Structured Context Bridge�
 ### 自动化验证
 
 - `npm run check`：PASS（通过）。
-- 全量 `npm test`：最终候选全绿。
-- GitHub Actions CI（持续集成）：最终候选 SUCCESS（成功）。
+- 全量 `npm test`：**322 / 322 PASS**（全部通过）。
+- GitHub Actions CI（持续集成）run **#416**：**SUCCESS（成功）**。
 - 新增回归覆盖：附件 `accept` 安全边界、渲染导航授权边界、V0.6/V0.5.3 版本兼容、能力证据状态等。
 
 ### Live evidence / 真实浏览器证据
