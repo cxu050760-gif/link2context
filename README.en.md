@@ -6,13 +6,22 @@ English | [中文](./README.md)
 
 V0.3 focuses on more than fetching. It tries to keep only the useful context after retrieval. ChatGPT public shares and WorkBuddy shares now have dedicated conversation extractors instead of feeding a web AI roughly 1 MB of hydration/JSON internals.
 
+**V0.3.1 adds target-aware handoff.** The same clean context is no longer forced through the same delivery mechanism on every web AI. On ChatGPT, WorkBuddy and ChatGPT conversation shares are file-first and use clean Markdown attachments to avoid rich-composer stalls. DeepSeek and other targets keep their already-working inline-text path for short and medium content.
+
 ## Normal workflow
 
 1. Paste one `http://` or `https://` URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
 2. Press Enter or click Send.
-3. Link2Context intercepts the URL-only message → fetches locally → detects the source → cleans it → injects/uploads it → continues the send.
+3. Link2Context intercepts the URL-only message → fetches locally → detects the source → cleans it → **chooses text or attachment based on the destination AI** → injects/uploads it → continues the send.
 
-Short context is injected as text. Long clean context automatically becomes a `.md` (Markdown) attachment when possible.
+Delivery is now target-aware instead of controlled by one global size threshold:
+
+- **ChatGPT + WorkBuddy / ChatGPT conversation shares**: prefer a clean `.md` (Markdown) attachment.
+- **ChatGPT + generic content**: short content stays inline; at 24,000 characters it becomes an attachment.
+- **DeepSeek / other targets**: retain the existing 250,000-character global hard threshold, preserving already-working short/medium inline behavior.
+- **Binary files**: continue through the attachment path.
+
+The progress panel shows the destination host, source kind, payload size, selected handoff mode, and reason.
 
 ## V0.3: clean conversation extraction
 
@@ -53,7 +62,7 @@ Source / 来源链接: https://chatgpt.com/share/...
 - **JSON / APIs**: parses the full JSON before rendering AI-readable structure and sniffs mislabeled responses.
 - **Plain text / XML / JavaScript**: wraps content with source metadata.
 - **PDF / images / ZIP / other binary files**: safely fetches and attempts to attach the file to the current web-AI message.
-- **Very long text**: converts to a `.md` attachment instead of overflowing a composer.
+- **Very long text**: converts to a `.md` attachment according to the destination's stability policy instead of overflowing a composer.
 
 ## Built-in web AI support
 
@@ -85,7 +94,8 @@ Link2Context has powerful cross-origin fetch permissions, so automatic mode keep
 - fetched text is explicitly marked as untrusted external data, not instructions;
 - likely secret query parameters are redacted from generated context;
 - ChatGPT serialized objects are decoded into null-prototype objects to prevent `__proto__` prototype pollution;
-- decoder depth, slot count, search nodes, and output message counts are bounded.
+- decoder depth, slot count, search nodes, and output message counts are bounded;
+- if an attachment cannot be confirmed by the destination AI, Link2Context does not silently fall back to dumping a large body into the composer; auto-send stops with an explicit error.
 
 See [SECURITY.md](./SECURITY.md).
 
@@ -98,10 +108,13 @@ npm run check
 
 V0.3 adds **15 adversarial review rounds** focused on public AI conversations → clean context: branch contamination, malformed promises, cyclic mappings, prototype pollution, base64 bloat, prompt injection, invalid timestamps, shell-page fallback, host/path escape, manual/automatic divergence, and more.
 
+V0.3.1 adds 14 target-aware handoff regressions covering ChatGPT/DeepSeek routing, lookalike hosts, soft/hard thresholds, invalid sizes, real sender-host binding, and progress/diagnostic metadata.
+
 See:
 
 - [V0.3 Adversarial Review](./docs/ATTACK-REVIEW-V0.3.md)
 - [V0.3 Design](./docs/DESIGN-V0.3.md)
+- [V0.3.1 Target-aware Handoff Fix](./docs/HOTFIX-V0.3.1.md)
 - [References](./docs/REFERENCES.md)
 
 ## Prior art
