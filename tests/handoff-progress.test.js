@@ -53,9 +53,12 @@ test('unconfirmed automatic send becomes an explicit error instead of fake succe
   assert.match(content, /Content is ready, but send could not be confirmed/);
 });
 
-test('attachment or composer failures become terminal handoff errors', () => {
+test('attachment/composer failures default to HANDOFF while upstream failures preserve their real stage', () => {
   const content = read('extension/content-script.js');
-  assert.match(content, /'handoff-error'.*state: 'error'/s);
+  assert.match(content, /failure\.l2cStage = result\?\.errorStage \|\| 'PIPELINE'/);
+  assert.match(content, /const errorStage = String\(error\?\.l2cStage \|\| 'HANDOFF'\)\.toUpperCase\(\)/);
+  assert.match(content, /failureLabel\(errorStage\)/);
+  assert.match(content, /state: 'error'/);
   assert.match(content, /restoreFailedJob\(job, message\)/);
 });
 

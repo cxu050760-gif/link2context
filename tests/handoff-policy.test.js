@@ -71,9 +71,10 @@ test('invalid or negative size values fail safely to zero-sized inline planning'
   assert.equal(mode({ targetHost: 'chat.deepseek.com', sourceKind: 'generic', payloadChars: Number.NaN }), 'text');
 });
 
-test('background passes the actual sender host into the handoff planner', () => {
+test('background binds the handoff planner to the real sender host and classified source kind', () => {
   const background = read('extension/background.js');
-  assert.match(background, /planContextHandoff\(\{ targetHost, sourceKind: resolved\.kind, payloadChars: payload\.length \}\)/);
+  assert.match(background, /const sourceKind = resolved\.kind === 'generic' \? resource\.kind : resolved\.kind/);
+  assert.match(background, /planContextHandoff\(\{ targetHost, sourceKind, payloadChars: payload\.length \}\)/);
   assert.match(background, /resolveForAi\(message\.url, report, \{ targetHost: senderHost\(sender\) \}\)/);
 });
 
