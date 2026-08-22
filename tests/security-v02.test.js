@@ -22,7 +22,8 @@ test('WorkBuddy extraction omits image base64, reasoning bodies and tool argumen
 
 test('manifest wires service worker and automatic content script on HTTP(S)', () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.version, '0.2.0');
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.deepEqual(manifest.content_scripts[0].matches, ['http://*/*', 'https://*/*']);
   assert.ok(manifest.permissions.includes('storage'));
