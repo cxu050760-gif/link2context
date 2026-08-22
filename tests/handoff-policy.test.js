@@ -75,7 +75,9 @@ test('background binds the handoff planner to the real sender host and classifie
   const background = read('extension/background.js');
   assert.match(background, /const sourceKind = resolved\.kind === 'generic' \? resource\.kind : resolved\.kind/);
   assert.match(background, /planContextHandoff\(\{ targetHost, sourceKind, payloadChars: payload\.length \}\)/);
-  assert.match(background, /resolveForAi\(message\.url, report, \{ targetHost: senderHost\(sender\) \}\)/);
+  assert.match(background, /targetHost: senderHost\(sender\)/);
+  assert.match(background, /signal: controller\.signal/);
+  assert.match(background, /windowId: sender\?\.tab\?\.windowId/);
 });
 
 test('progress panel receives a concrete handoff-plan stage with target, source, size and mode', () => {

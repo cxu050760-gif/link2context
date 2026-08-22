@@ -12,7 +12,10 @@ test('progress UI loads before the interception content script', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const pkg = JSON.parse(read('package.json'));
   assert.equal(manifest.version, pkg.version);
-  assert.deepEqual(manifest.content_scripts[0].js.slice(0, 2), ['progress-ui.js', 'content-script.js']);
+  const scripts = manifest.content_scripts[0].js;
+  const interceptorIndex = scripts.findIndex((name) => /^content-script(?:-|\.js)/.test(name));
+  assert.equal(scripts[0], 'progress-ui.js');
+  assert.ok(interceptorIndex > 0);
 });
 
 test('progress panel shows elapsed time, history, success and persistent error state', () => {

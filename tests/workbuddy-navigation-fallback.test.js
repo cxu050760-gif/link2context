@@ -22,7 +22,9 @@ test('WorkBuddy direct fetch failure has a real browser-navigation fallback', ()
   const background = read('extension/background.js');
   assert.match(background, /resolved\.kind === 'workbuddy'/);
   assert.match(background, /readWorkBuddyViaBackgroundTab/);
-  assert.match(background, /chrome\.tabs\.create\(\{ url: target\.href, active: false \}\)/);
+  assert.match(background, /const createOptions = \{ url: target\.href, active: false \}/);
+  assert.match(background, /if \(Number\.isInteger\(windowId\)\) createOptions\.windowId = windowId/);
+  assert.match(background, /chrome\.tabs\.create\(createOptions\)/);
   assert.match(background, /chrome\.scripting\.executeScript/);
   assert.match(background, /chrome\.tabs\.remove\(tabId\)/);
 });
