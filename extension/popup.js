@@ -12,6 +12,8 @@ const state = { markdown: '', filename: 'context.md', currentHost: '' };
 const CUSTOM_HOSTS_KEY = 'customAiHosts';
 const BROWSER_CONTEXT_KEY = 'authorizedBrowserContext';
 const BROWSER_CONTEXT_DENY_KEY = 'browserContextDeniedHosts';
+const deliveryApi = globalThis.Link2ContextDelivery;
+const HANDOFF_PREFERENCE_KEY = deliveryApi?.STORAGE_KEY || 'handoffPreference';
 
 function setStatus(msg, isError = false) {
   $('status').textContent = msg;
@@ -60,6 +62,26 @@ async function refreshSiteUi() {
   button.hidden = false;
   button.textContent = enabled ? '关闭当前网站自动模式 / Disable' : '启用当前网站自动模式 / Enable';
   button.dataset.enabled = enabled ? '1' : '0';
+}
+
+function handoffHint(mode) {
+  if (mode === 'document') return 'Markdown 文档：文本类链接会尽量作为 .md 附件交给网页 AI；原始 PDF/图片/压缩包等仍保持原文件。';
+  if (mode === 'text') return '长文本：文本类内容尽量直接写入输入框；超过编辑器安全上限时仍会保留文档方式，避免把页面输入框写坏。';
+  return '智能模式：按目标 AI、来源类型和长度自动选择。ChatGPT 对话通常优先 Markdown 文档，DeepSeek / 豆包等短内容通常优先长文本。';
+}
+
+async function refreshHandoffPreferenceUi() {
+  const data = await chrome.storage.local.get(HANDOFF_PREFERENCE_KEY);
+  const mode = deliveryApi?.normalizeMode?.(data[HANDOFF_PREFERENCE_KEY])
+    || (['document', 'text'].includes(data[HANDOFF_PREFERENCE_KEY]) ? data[HANDOFF_PREFERENCE_KEY] : 'auto');
+  $('handoffPreference').value = mode;
+  $('handoffPreferenceHint').textContent = handoffHint(mode);
+}
+
+async function saveHandoffPreference() {
+  const mode = deliveryApi?.normalizeMode?.($('handoffPreference').value) || $('handoffPreference').value;
+  await chrome.storage.local.set({ [HANDOFF_PREFERENCE_KEY]: mode });
+  $('handoffPreferenceHint').textContent = handoffHint(mode);
 }
 
 function parseDeniedHosts(value) {
@@ -176,6 +198,7 @@ $('toggleSite').addEventListener('click', async () => {
   await setCustomHosts(next);
   await refreshSiteUi();
 });
+$('handoffPreference').addEventListener('change', saveHandoffPreference);
 $('toggleBrowserContext').addEventListener('click', toggleBrowserContext);
 $('saveDeniedHosts').addEventListener('click', saveDeniedHosts);
 $('convert').addEventListener('click', convert);
@@ -187,8 +210,8 @@ $('copy').addEventListener('click', async () => {
 $('save').addEventListener('click', async () => {
   const blob = new Blob([state.markdown], { type: 'text/markdown;charset=utf-8' });
   const objectUrl = URL.createObjectURL(blob);
-  try { await chrome.downloads.download({ url: objectUrl, filename: state.filename, saveAs: true });
-  } finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
+  try { await chrome.downloads.download({ url: objectUrl, filename: state.filename, saveAs: true }); }
+  finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
 });
 
-Promise.all([refreshSiteUi(), refreshBrowserContextUi()]).catch(() => {});
+Promise.all([refreshSiteUi(), refreshHandoffPreferenceUi(), refreshBrowserContextUi()]).catch(() => {});

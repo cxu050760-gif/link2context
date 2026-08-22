@@ -18,6 +18,17 @@
       <p class="hint">ChatGPT、豆包、Kimi、Claude、Gemini、DeepSeek、千问等已内置支持；其他网页 AI 可在这里一键启用。</p>
     </section>
 
+    <section class="auto-box">
+      <strong>上下文交付方式 / Context delivery</strong>
+      <label for="handoffPreference">抓取完成后交给网页 AI 的形式</label>
+      <select id="handoffPreference">
+        <option value="auto">智能 / Auto（按目标 AI 与长度自动选择）</option>
+        <option value="document">Markdown 文档 / .md document</option>
+        <option value="text">长文本 / Inline long text</option>
+      </select>
+      <p id="handoffPreferenceHint" class="hint">智能模式保持现有策略：例如 ChatGPT 对话优先 Markdown 文档，DeepSeek / 豆包等短内容优先长文本。</p>
+    </section>
+
     <section class="auto-box browser-context-box">
       <div class="setting-head">
         <strong>授权浏览器上下文 / Authorized browser context</strong>
@@ -49,6 +60,7 @@
       </div>
     </details>
   </main>
+  <script src="delivery-mode.js"></script>
   <script type="module" src="popup.js"></script>
 </body>
 </html>
