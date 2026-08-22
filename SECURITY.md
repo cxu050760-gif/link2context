@@ -6,7 +6,7 @@ Link2Context V0.5.3 需要 `http://*/*` 与 `https://*/*` 主机权限，才能�
 
 ### V0.5.3 新增的页面交付边界
 
-真实千问测试证明：**DOM 中看得到文本或附件卡片，不等于网页 AI 的内部发送状态真的包含这些内容。** 因此 V0.5.3 不再把“可见”当作充分成功证据。
+真实千问测试证明：**DOM 中看得到文本或附件卡片，不等于网页 AI 的内部发送状态真的包含这些内容。** 具体失败表现曾是：扩展生成的内容无法删除，用户另外输入文字后发送，最终只发送了用户后来输入的文字。因此 V0.5.3 不再把“可见”当作充分成功证据。
 
 - Qwen / Tongyi 普通文本交付使用浏览器编辑路径，不直接设置 `innerHTML` / `textContent`，也不在写入后伪造 `InputEvent`；
 - 写入文本必须在失焦/回焦后仍可读，并且千问自身的发送控件必须自行进入可用状态，否则返回 `QWEN_EDITOR_STATE_UNCONFIRMED`；
@@ -55,7 +55,7 @@ Link2Context V0.5.3 requests `http://*/*` and `https://*/*` host permissions so 
 
 ### V0.5.3 page-handoff boundary
 
-Live Qwen testing demonstrated that **text or an attachment-looking card being visible in the DOM does not prove that the web AI's internal send state contains it.** V0.5.3 therefore rejects visibility-only success.
+Live Qwen testing demonstrated that **text or an attachment-looking card being visible in the DOM does not prove that the web AI's internal send state contains it.** One observed failure left extension-created content undeletable; after the user typed additional characters, Qwen sent only those newly typed characters. V0.5.3 therefore rejects visibility-only success.
 
 - Ordinary Qwen/Tongyi text delivery uses the browser editing path instead of assigning `innerHTML` / `textContent` or manufacturing a synthetic `InputEvent` after the write.
 - Text must survive blur/refocus reconciliation and Qwen's own send control must become enabled; otherwise the result is `QWEN_EDITOR_STATE_UNCONFIRMED`.
