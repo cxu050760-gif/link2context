@@ -129,9 +129,13 @@ export function detectResourceType({ bytes, contentType = '', url = '' } = {}) {
   }
 
   if (declaredMime && declaredKind !== 'binary') {
-    if (declaredKind === 'json' || declaredKind === 'html') return { kind: declaredKind, mime: declaredMime, extension: ext, reason: `mime:${declaredMime}`, declaredMime };
-    if (looksLikeTextBytes(bytes)) return sniffText(bytes, declaredMime);
-    return { kind: 'binary', mime: 'application/octet-stream', extension: ext, reason: `binary-bytes-despite-mime:${declaredMime}`, declaredMime };
+    if (!looksLikeTextBytes(bytes)) {
+      return { kind: 'binary', mime: 'application/octet-stream', extension: ext, reason: `binary-bytes-despite-mime:${declaredMime}`, declaredMime };
+    }
+    if (declaredKind === 'json' || declaredKind === 'html') {
+      return { kind: declaredKind, mime: declaredMime, extension: ext, reason: `mime:${declaredMime}`, declaredMime };
+    }
+    return sniffText(bytes, declaredMime);
   }
 
   if (looksLikeTextBytes(bytes)) return { ...sniffText(bytes, declaredMime), extension: ext, declaredMime };
