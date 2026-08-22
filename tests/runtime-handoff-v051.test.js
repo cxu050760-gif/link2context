@@ -64,66 +64,66 @@ test('attack 08: popup persists send preference independently from handoff forma
   assert.match(popupJs, /refreshSendPreferenceUi/);
 });
 
-test('attack 09: runtime reads send preference from extension storage and fails safe to manual', () => {
+test('attack 09: historical V0.5.1 runtime reads send preference from extension storage and fails safe to manual', () => {
   assert.match(content, /const SEND_KEY =/);
   assert.match(content, /async function getSendMode\(\)/);
   assert.match(content, /return 'manual';/);
 });
 
-test('attack 10: legacy V0.5.1 paste path still prepares only; V0.5.2 adds the independent reliability auto-send layer', () => {
+test('attack 10: historical V0.5.1 paste path prepared only and remains available for regression archaeology', () => {
   assert.match(content, /Paste only starts preparation\. It never sends immediately/);
   assert.match(content, /startJob\(editor, url\);/);
 });
 
-test('attack 11: Enter interception consults the send preference before setting autoSubmit', () => {
+test('attack 11: historical Enter interception consulted the send preference before setting autoSubmit', () => {
   assert.match(content, /document\.addEventListener\('keydown', async/);
   assert.match(content, /const autoSubmit = \(await getSendMode\(\)\) === 'auto';/);
   assert.match(content, /startJob\(editor, url, \{ autoSubmit \}\);/);
 });
 
-test('attack 12: click interception only preserves the original submit button in auto mode', () => {
+test('attack 12: historical click interception only preserved the original submit button in auto mode', () => {
   assert.match(content, /submitter: autoSubmit \? button : null/);
   assert.match(content, /if \(autoSubmit\) \{\s*existing\.autoSubmit = true;\s*existing\.submitter = button;/s);
 });
 
-test('attack 13: attachment readiness no longer requires the full filename to be visible', () => {
+test('attack 13: historical attachment readiness did not require the full filename to be visible', () => {
   assert.match(content, /scopeContainsAttachmentName\(scope, fileName\)/);
   assert.doesNotMatch(content, /if \(fileName && text\.includes\(fileName\)\) return true;/);
 });
 
-test('attack 14: a failed attachment confirmation reports handoff failure, not an auto-send failure', () => {
+test('attack 14: historical failed attachment confirmation reports handoff failure, not an auto-send failure', () => {
   assert.match(content, /已停止本次交付/);
   assert.doesNotMatch(content, /Attachment was not confirmed by the web AI; auto-send stopped/);
 });
 
-test('attack 15: Qwen can reveal a file input through a generic plus/more menu then a nested file action', () => {
+test('attack 15: historical Qwen path could reveal a file input through a generic plus/more menu then a nested file action', () => {
   assert.match(content, /looksLikeAddMenu/);
   assert.match(content, /qwenHost\) attach = localControls\.find\(looksLikeAddMenu\)/);
   assert.match(content, /const nestedAttach = bestAttachmentControl/);
 });
 
-test('attack 16: attachment menu scoring prefers file/attachment actions over image-only actions', () => {
+test('attack 16: historical attachment menu scoring preferred file/attachment actions over image-only actions', () => {
   assert.match(content, /attachmentControlScore/);
   assert.match(content, /\(file\|文件\).*score \+= 7/);
   assert.match(content, /\(image\|photo\|图片\|照片\).*score -= 4/);
 });
 
-test('attack 17: runtime still never force-enables a disabled send control', () => {
+test('attack 17: historical runtime never force-enabled a disabled send control', () => {
   assert.doesNotMatch(content, /removeAttribute\(['"]disabled['"]\)/);
   assert.doesNotMatch(content, /\.disabled\s*=\s*false/);
   assert.match(content, /no forced click was attempted/);
 });
 
-test('attack 18: manual completion is reported as success instead of a false send failure', () => {
+test('attack 18: historical manual completion was reported as success instead of a false send failure', () => {
   assert.match(content, /内容已准备好，等待手动发送 \/ Ready for manual send/);
   assert.match(content, /\{ state: 'success' \}/);
 });
 
-test('attack 19: package and extension manifest expose the same V0.5.2 revision', () => {
+test('attack 19: package and extension manifest expose the current V0.5.3 revision', () => {
   const pkg = JSON.parse(read('package.json'));
   const manifest = JSON.parse(read('extension/manifest.json'));
-  assert.equal(pkg.version, '0.5.2');
-  assert.equal(manifest.version, '0.5.2');
+  assert.equal(pkg.version, '0.5.3');
+  assert.equal(manifest.version, '0.5.3');
 });
 
 test('attack 20: handoff format and send behavior remain orthogonal settings', () => {
