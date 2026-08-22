@@ -21,11 +21,13 @@ test('WorkBuddy extraction omits image base64, reasoning bodies and tool argumen
   assert.doesNotMatch(md, /SECRET_BASE64|PRIVATE_REASONING|SECRET_TOKEN/);
 });
 
-test('manifest wires service worker and automatic content script on HTTP(S)', () => {
+test('manifest wires the V0.5.3 service-worker wrapper and automatic content script on HTTP(S)', () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const wrapper = fs.readFileSync(new URL('../extension/background-v053.js', import.meta.url), 'utf8');
   assert.equal(manifest.version, pkg.version);
-  assert.equal(manifest.background.service_worker, 'background.js');
+  assert.equal(manifest.background.service_worker, 'background-v053.js');
+  assert.match(wrapper, /import '\.\/background\.js'/);
   assert.deepEqual(manifest.content_scripts[0].matches, ['http://*/*', 'https://*/*']);
   assert.ok(manifest.permissions.includes('storage'));
   assert.ok(manifest.permissions.includes('activeTab'));

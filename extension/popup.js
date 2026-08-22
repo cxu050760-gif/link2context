@@ -10,6 +10,11 @@ import { isKnownAiHost, normalizeHost } from './core/auto-bridge.js';
 const $ = (id) => document.getElementById(id);
 const state = { markdown: '', filename: 'context.md', currentHost: '' };
 const CUSTOM_HOSTS_KEY = 'customAiHosts';
+const BROWSER_CONTEXT_KEY = 'authorizedBrowserContext';
+const BROWSER_CONTEXT_DENY_KEY = 'browserContextDeniedHosts';
+const deliveryApi = globalThis.Link2ContextDelivery;
+const HANDOFF_PREFERENCE_KEY = deliveryApi?.STORAGE_KEY || 'handoffPreference';
+const SEND_PREFERENCE_KEY = deliveryApi?.SEND_STORAGE_KEY || 'sendPreference';
 
 function setStatus(msg, isError = false) {
   $('status').textContent = msg;
@@ -58,6 +63,91 @@ async function refreshSiteUi() {
   button.hidden = false;
   button.textContent = enabled ? '关闭当前网站自动模式 / Disable' : '启用当前网站自动模式 / Enable';
   button.dataset.enabled = enabled ? '1' : '0';
+}
+
+function handoffHint(mode) {
+  if (mode === 'document') return 'Markdown 文档：文本类链接会尽量作为 .md 附件交给网页 AI；原始 PDF/图片/压缩包等仍保持原文件。';
+  if (mode === 'text') return '长文本：文本类内容尽量直接写入输入框；超过编辑器安全上限时仍会保留文档方式，避免把页面输入框写坏。';
+  return '智能模式：按目标 AI、来源类型和长度自动选择。ChatGPT 对话通常优先 Markdown 文档，DeepSeek / 豆包等短内容通常优先长文本。';
+}
+
+async function refreshHandoffPreferenceUi() {
+  const data = await chrome.storage.local.get(HANDOFF_PREFERENCE_KEY);
+  const mode = deliveryApi?.normalizeMode?.(data[HANDOFF_PREFERENCE_KEY])
+    || (['document', 'text'].includes(data[HANDOFF_PREFERENCE_KEY]) ? data[HANDOFF_PREFERENCE_KEY] : 'auto');
+  $('handoffPreference').value = mode;
+  $('handoffPreferenceHint').textContent = handoffHint(mode);
+}
+
+async function saveHandoffPreference() {
+  const mode = deliveryApi?.normalizeMode?.($('handoffPreference').value) || $('handoffPreference').value;
+  await chrome.storage.local.set({ [HANDOFF_PREFERENCE_KEY]: mode });
+  $('handoffPreferenceHint').textContent = handoffHint(mode);
+}
+
+function sendHint(mode) {
+  if (mode === 'auto') return '自动发送：无论你是粘贴链接、按 Enter 还是点击发送，Link2Context 都会先完成抓取与交付，确认当前网页 AI 的发送控件可用后再自动发送；不会强行启用灰色按钮。';
+  return '手动确认：无论你是粘贴、按 Enter 还是点击发送，Link2Context 都只把文档或长文本准备好并停在输入框里，你检查后再发送。';
+}
+
+async function refreshSendPreferenceUi() {
+  const data = await chrome.storage.local.get(SEND_PREFERENCE_KEY);
+  const mode = deliveryApi?.normalizeSendMode?.(data[SEND_PREFERENCE_KEY])
+    || (data[SEND_PREFERENCE_KEY] === 'auto' ? 'auto' : 'manual');
+  $('sendPreference').value = mode;
+  $('sendPreferenceHint').textContent = sendHint(mode);
+}
+
+async function saveSendPreference() {
+  const mode = deliveryApi?.normalizeSendMode?.($('sendPreference').value)
+    || ($('sendPreference').value === 'auto' ? 'auto' : 'manual');
+  await chrome.storage.local.set({ [SEND_PREFERENCE_KEY]: mode });
+  $('sendPreferenceHint').textContent = sendHint(mode);
+}
+
+function parseDeniedHosts(value) {
+  return [...new Set(String(value || '')
+    .split(/[\s,;，；]+/)
+    .map((item) => normalizeHost(item.replace(/^https?:\/\//i, '').split('/')[0]))
+    .filter((host) => host && /^[a-z0-9.-]+$/i.test(host) && !host.includes('..')))];
+}
+
+async function refreshBrowserContextUi() {
+  const data = await chrome.storage.local.get([BROWSER_CONTEXT_KEY, BROWSER_CONTEXT_DENY_KEY]);
+  const enabled = data[BROWSER_CONTEXT_KEY] === true;
+  const deniedHosts = Array.isArray(data[BROWSER_CONTEXT_DENY_KEY]) ? data[BROWSER_CONTEXT_DENY_KEY] : [];
+  const stateEl = $('browserContextState');
+  const button = $('toggleBrowserContext');
+  stateEl.textContent = enabled ? '已授权 / ON' : '未授权 / OFF';
+  stateEl.className = `badge ${enabled ? 'on' : 'off'}`;
+  button.dataset.enabled = enabled ? '1' : '0';
+  button.textContent = enabled
+    ? '撤销浏览器上下文授权 / Revoke authorization'
+    : '一次性授权并持续使用 / Authorize once';
+  $('browserContextDeniedHosts').value = deniedHosts.join(', ');
+}
+
+async function toggleBrowserContext() {
+  const enabled = $('toggleBrowserContext').dataset.enabled === '1';
+  if (enabled) {
+    await chrome.storage.local.set({ [BROWSER_CONTEXT_KEY]: false });
+    await refreshBrowserContextUi();
+    return;
+  }
+  const accepted = window.confirm(
+    '开启后，Link2Context 在 Direct Fetch（直接抓取）遇到 401 / 403 或 JS 空壳时，可以自动在后台使用当前浏览器的 JavaScript 渲染、Session（会话）和 Cookie（登录状态）读取你发送的目标链接，并把取得的内容交给当前网页 AI。\n\n这是一项持续授权：后续不会每个链接重复询问；使用时会在进度面板显示，可随时 STOP 或在这里撤销。\n\nEnable persistent authorized browser-context fallback?',
+  );
+  if (!accepted) return;
+  await chrome.storage.local.set({ [BROWSER_CONTEXT_KEY]: true });
+  await refreshBrowserContextUi();
+}
+
+async function saveDeniedHosts() {
+  const hosts = parseDeniedHosts($('browserContextDeniedHosts').value);
+  await chrome.storage.local.set({ [BROWSER_CONTEXT_DENY_KEY]: hosts });
+  $('browserContextDeniedHosts').value = hosts.join(', ');
+  $('saveDeniedHosts').textContent = '已保存 / Saved';
+  setTimeout(() => { $('saveDeniedHosts').textContent = '保存排除列表 / Save deny list'; }, 1200);
 }
 
 async function convert() {
@@ -129,6 +219,10 @@ $('toggleSite').addEventListener('click', async () => {
   await setCustomHosts(next);
   await refreshSiteUi();
 });
+$('handoffPreference').addEventListener('change', saveHandoffPreference);
+$('sendPreference').addEventListener('change', saveSendPreference);
+$('toggleBrowserContext').addEventListener('click', toggleBrowserContext);
+$('saveDeniedHosts').addEventListener('click', saveDeniedHosts);
 $('convert').addEventListener('click', convert);
 $('downloadOriginal').addEventListener('click', downloadOriginal);
 $('copy').addEventListener('click', async () => {
@@ -142,4 +236,4 @@ $('save').addEventListener('click', async () => {
   finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
 });
 
-refreshSiteUi().catch(() => {});
+Promise.all([refreshSiteUi(), refreshHandoffPreferenceUi(), refreshSendPreferenceUi(), refreshBrowserContextUi()]).catch(() => {});

@@ -4,161 +4,99 @@ English | [中文](./README.md)
 
 **Send one URL in a web-AI chat. Link2Context fetches the resource in your browser, classifies it, cleans it into AI-ready context, and hands it to the current AI.**
 
-V0.4.0 explicitly separates the generic pipeline into:
+> Current test branch: **V0.5.3**. This release candidate focuses on real-browser handoff reliability. It keeps the V0.5.2 authorized-browser fallback and security boundaries, removes the old V0.5.1 + V0.5.2 stacked send-state design, and adds a Qwen/Tongyi adapter that requires evidence of the editor's real send state. **V0.5.3 remains a Draft candidate and is not merge-ready until the live smoke gate passes.**
+
+## V0.5.3 closeout focus
+
+- **Qwen visible UI is no longer accepted as real state.** Live testing produced an exact failure where extension-created content could not be deleted; after the user typed extra characters and sent, Qwen transmitted only those newly typed characters. That proves visible content can exist outside Qwen's actual send state.
+- **Ordinary Qwen text uses the browser editing path.** The Qwen adapter uses the browser's editing command rather than assigning `innerHTML`, `textContent`, or manufacturing a synthetic `InputEvent` after the write. The text must survive blur/refocus reconciliation and Qwen's own send control must become enabled. Otherwise the handoff fails with `QWEN_EDITOR_STATE_UNCONFIRMED`.
+- **Original PDF/image/binary resources remain original attachments.** A filename merely appearing in the DOM is insufficient evidence; Qwen must also expose an enabled send control or the adapter fails with `QWEN_ATTACHMENT_STATE_UNCONFIRMED`.
+- **One owner per Qwen gesture.** `qwen-state-bridge-v053.js` loads before the generic `content-script-v053.js` and stops propagation for Qwen gestures it owns, preventing two send state machines from processing the same action.
+- **Auto-send remains fail-closed.** A button click is never success by itself; independent page evidence is required or the result is `SEND_UNCONFIRMED`.
+- **STOP covers the complete handoff.** Network acquisition, attachment waiting, editor delivery, and auto-send waiting can all be cancelled.
+- **Pagination remains bounded.** Besides rel-next and numeric links, V0.5.3 recognizes declarative `data-url` / `data-page` and same-origin onclick navigation while retaining same-origin, article-family, page-count, and size limits.
+
+## How it works
+
+1. Paste a single `http://` or `https://` URL into a supported web-AI composer.
+2. Link2Context intercepts that real user gesture and acquires, classifies, and cleans the target resource in the browser.
+3. It chooses text or attachment delivery based on resource type and target AI.
+4. Send behavior stays separate: manual review is the safe default, while auto-send is explicit opt-in.
+5. If public acquisition hits 401 / 403 or a client-render shell, the user may explicitly authorize browser-context fallback in the popup. No authorization means no silent session reuse.
+
+## Retained V0.5.2 capability: authorized browser fallback
+
+- Public fetching is unauthenticated by default.
+- 401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` may enter Authorized Browser Context only after explicit user authorization.
+- Authorization can be revoked and individual hosts can be deny-listed.
+- Link2Context does not directly read or store Cookie values through `chrome.cookies`.
+- Requested/final URLs, response size, timeout, and cancellation boundaries remain enforced.
+- It does not bypass login walls, CAPTCHAs, DRM, paywalls, or site access controls.
+
+## Generic resource pipeline
 
 ```text
 Acquire → Classify → Render if needed → Extract → Handoff
 ```
 
-It is now **byte-first**: raw bytes, file signatures, MIME, and URL extensions are considered before text decoding. PDF, images, archives, Office files, audio/video, and unknown binary resources default to original-file attachments instead of being decoded into garbage text.
+Classification is byte-first: file signatures, MIME, and URL extensions are considered before decoding text. PDFs, images, archives, Office files, audio/video, and unknown binary resources default to original-file attachments instead of becoming garbage text.
 
-V0.3 previously added clean ChatGPT/WorkBuddy conversation extraction, while V0.3.1 added target-aware delivery: ChatGPT is file-first for conversation sources and DeepSeek/other targets keep their stable short/medium inline path.
+HTML gets lightweight article extraction and common navigation/footer/sidebar/script/style noise removal. JSON, plain text, XML, and CSV become readable context. ChatGPT shares and WorkBuddy shares use dedicated clean conversation parsers.
 
-## Normal workflow
+## Pagination
 
-1. Paste one HTTP(S) URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
-2. Press Enter or click Send.
-3. Link2Context intercepts → fetches locally → classifies → cleans/parses → chooses text or attachment from both resource type and target AI → uploads/injects → continues send.
+Safe pagination currently covers:
 
-## V0.4: universal URL pipeline hardening
+- `<link rel="next">`;
+- explicit Next links within the same article URL family;
+- numeric pagination;
+- `data-href` / `data-url` / `data-next-url` / `data-page-url`;
+- `data-page` / `data-page-number` / `data-pageno`;
+- same-origin onclick location navigation.
 
-### Binary is no longer text by default
+Pagination stays same-origin, is capped at eight pages, and remains subject to response-size and cancellation limits. V0.5.3 does not claim generic SPA infinite-scroll support.
 
-Classification combines:
-
-- **Magic signatures** such as `%PDF-`, PNG/JPEG, ZIP, MP3/MP4;
-- **Content-Type / MIME**;
-- **URL file extension**;
-- byte-level text plausibility plus JSON/HTML sniffing.
-
-A strong binary signature wins over a misleading `text/plain`. Conversely, if a server claims `text/html` or `application/json` but the bytes are clearly binary, Link2Context fails closed to binary handling.
-
-Original-file attachment handling currently covers PDF, common images, ZIP/7z/RAR/gzip, DOCX/XLSX/PPTX and related documents, common audio/video, and unknown binary.
-
-### Errors retain their real stage
-
-Failures no longer collapse into `Page handoff failed`:
-
-- `AUTH_REQUIRED_401` — authentication/authorization required;
-- `FETCH_BLOCKED_403` — server denied the fetch;
-- `NOT_FOUND_404`;
-- `RATE_LIMITED_429`;
-- `HTTP_5XX`;
-- `FETCH_TIMEOUT`;
-- `FETCH_NETWORK_ERROR`;
-- `RESPONSE_TOO_LARGE`;
-- `CLIENT_RENDER_CONTENT_MISSING` — HTML arrived but contains only a client-render shell;
-- only actual upload/composer/send failures are `HANDOFF` failures.
-
-401/403/404/429 are not pointlessly retried. Network failures, timeouts, and 5xx retain bounded retry behavior.
-
-### Cleaner generic HTML
-
-The lightweight extractor now favors semantic `<main>` / `<article>` and removes common navigation/footer/sidebar/form/menu/login/language/toolbar wrappers plus active script/style/iframe noise.
-
-This remains a zero-dependency lightweight extractor; it does not claim parity with Mozilla Readability, Defuddle, or Trafilatura. If extraction quality becomes the dominant bottleneck, the project keeps the rule **Reuse > Adapt > Compose > Build from scratch** and should evaluate a mature extractor before growing endless site rules.
-
-### Safe multi-page articles
-
-V0.4 can follow same-origin `rel=next` or explicit article pagination such as “Next / 下一页” when the URL still belongs to the same article family:
-
-- same origin only;
-- generic Next links must remain in the same article family;
-- maximum 8 pages;
-- maximum 3 MiB per additional page;
-- all pages still share the global 12 MiB budget;
-- loop protection;
-- if a later page fails, already-fetched pages are preserved and output is marked `PARTIAL`.
-
-### Client-render shells: explicit failure, no silent session reuse
-
-Large HTML with an empty `root/app/__next`, explicit JavaScript-required text, or almost no useful body content becomes `CLIENT_RENDER_CONTENT_MISSING / RENDER`.
-
-**Generic browser navigation fallback is intentionally not enabled for arbitrary URLs.** Browser navigation may carry cookies and logged-in sessions. Silently reading private DOM and then handing it to another AI would create an unacceptable data-exfiltration boundary. Existing WorkBuddy and ChatGPT Share fallbacks remain pinned to their public-share hosts and paths.
-
-## V0.3: clean conversation extraction
-
-### ChatGPT public shares
-
-For `https://chatgpt.com/share/...`, Link2Context decodes public turbo-stream/hydration data, keeps only the active conversation branch, preserves User/Assistant text, and omits system/tool/page-state/large base64 noise. The browser fallback is restricted to the exact public ChatGPT Share URL.
-
-### WorkBuddy shares
-
-`workbuddy.link/p/...` resolves to the public `conversation-data.json` and uses the same clean conversation Markdown schema, omitting large images, reasoning bodies, and tool payloads.
-
-## Target-aware handoff
-
-- **ChatGPT + WorkBuddy / ChatGPT conversation share**: prefer a clean `.md` attachment.
-- **ChatGPT + generic text**: short content stays inline; around 24,000 characters switches to attachment.
-- **DeepSeek / other targets**: retain the 250,000-character global hard limit.
-- **PDF / image / archive / Office / audio/video / other binary**: original-file attachment.
-
-The progress panel now covers fetch, classification, pagination, page handoff, attachment confirmation, send, and typed terminal errors.
-
-## Other link types
-
-- **HTML/article** → cleaned Markdown;
-- **JSON/API** → structured Markdown;
-- **plain text/XML/JavaScript/CSV** → text context;
-- **PDF/images/archives/Office/audio/video** → original attachment;
-- **very long text** → `.md` attachment according to the destination policy.
-
-## Built-in web AI support
+## Built-in web-AI targets
 
 ChatGPT, Claude, Gemini / Google AI Studio, Grok, Perplexity, DeepSeek, Doubao, Kimi, Qwen / Tongyi, Poe, Microsoft Copilot, Mistral Chat, and OpenRouter.
 
-For another web AI, open the site, click Link2Context, and choose **Enable current site**.
+For another web AI, open that site, click the Link2Context icon once, and choose **Enable current site**.
 
 ## Install (Chrome / Edge)
 
-1. Download or clone this repository.
+1. Download or clone the repository.
 2. Open `chrome://extensions` or `edge://extensions`.
 3. Enable Developer mode.
-4. Click **Load unpacked**.
+4. Choose **Load unpacked**.
 5. Select the repository's `extension` directory.
-6. After an update, run `git pull`, reload the extension, and refresh already-open AI tabs.
+6. After an update, pull the branch, reload the extension, and refresh already-open AI pages.
 
 ## Security boundaries
 
-- HTTP(S) only;
-- credential-bearing URLs rejected;
-- localhost/private/link-local/special-purpose/cloud-metadata addresses blocked;
-- every redirect revalidated;
-- `targetAddressSpace: public` requested when available;
-- response/time budgets enforced, including the global 12 MiB cap;
-- automatic fetch requires a real user gesture and verified destination-AI host;
-- WorkBuddy/ChatGPT Share browser fallbacks pinned to exact public hosts/paths;
-- fetched text explicitly marked untrusted external data, not instructions;
-- likely secret query parameters redacted;
-- ChatGPT serialized objects decoded into null-prototype objects;
-- attachment confirmation failure never fails open into a giant composer dump;
-- no bypass of authentication, CAPTCHAs, DRM, paywalls, or site access control.
+- HTTP / HTTPS only.
+- Credentials embedded in URLs are rejected.
+- localhost, private/link-local/special-purpose IP space, and cloud metadata targets are blocked.
+- Redirect destinations are revalidated.
+- Response size and timeout are bounded.
+- Automatic acquisition requires a real user event and the background validates the calling AI host again.
+- Browser-context fallback is explicit opt-in, revocable, and deny-listable by host.
+- Cookie values are not directly read.
+- External page content is marked as untrusted data.
+- Sensitive query parameters are redacted from display output.
+- Link2Context never force-removes `disabled` / `aria-disabled` from site controls.
+- On Qwen/Tongyi in particular, visible DOM state is not treated as proof of sendable editor state.
 
 See [SECURITY.md](./SECURITY.md).
 
-## Tests and adversarial review
+## Tests
 
 ```bash
 npm test
 npm run check
 ```
 
-V0.4 adds attacks around raw-byte classification, 401/403/404/429/5xx, network/timeouts, client-render shells, main-content cleaning, pagination escape/loops, and stage-preserving diagnostics, while retaining all V0.1–V0.3.1 regressions.
-
-See:
-
-- [V0.4 Universal Pipeline](./docs/V0.4-UNIVERSAL-PIPELINE.md)
-- [V0.4 Adversarial Review](./docs/ATTACK-REVIEW-V0.4.md)
-- [V0.3 Adversarial Review](./docs/ATTACK-REVIEW-V0.3.md)
-- [V0.3.1 Target-aware Handoff](./docs/HOTFIX-V0.3.1.md)
-- [References](./docs/REFERENCES.md)
-
-## Compatibility boundary
-
-“Any URL” means best-effort handling of **public, legitimate HTTP(S) resources permitted by browser/network policy**. It does not mean bypassing access control.
-
-A 403 is now accurately reported as `FETCH_BLOCKED_403`, but Link2Context does not claim to bypass the remote CDN. A 401 becomes `AUTH_REQUIRED_401`, without stealing logged-in cookies. Client-only SPAs are reported as missing rendered content instead of treating a title-only shell as success.
+GitHub Actions runs syntax checks and the full Node regression suite. Green automation still cannot prove that a third-party site's live DOM has not changed, so Qwen, DeepSeek, Doubao, pagination, STOP, PDF, and image flows remain part of the minimal live-browser smoke gate.
 
 ## License
 
-MIT License. See [LICENSE](./LICENSE).
+MIT

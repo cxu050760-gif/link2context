@@ -13,6 +13,8 @@ const KNOWN_AI_HOST_PATTERNS = [
   'kimi.com',
   'chat.qwen.ai',
   'qwen.ai',
+  'qianwen.com',
+  'qwenwork.cn',
   'tongyi.aliyun.com',
   'poe.com',
   'copilot.microsoft.com',

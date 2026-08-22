@@ -39,9 +39,13 @@ test('content script preserves background pipeline stage instead of relabeling e
   assert.match(content, /failureLabel\(errorStage\)/);
 });
 
-test('shell-only HTML has an explicit RENDER failure and does not silently reuse login cookies', () => {
+test('shell-only HTML requires explicit browser-context authorization and respects the host deny list', () => {
   assert.match(background, /CLIENT_RENDER_CONTENT_MISSING/);
-  assert.match(background, /will not silently reuse your logged-in browser session/);
+  assert.match(background, /const policy = await browserContextPolicy\(url\)/);
+  assert.match(background, /if \(!policy\.enabled\)/);
+  assert.match(background, /BROWSER_CONTEXT_AUTHORIZATION_REQUIRED/);
+  assert.match(background, /Browser-session fallback is disabled/);
+  assert.match(background, /one-time authorization/);
 });
 
 test('pagination is bounded by page count, same-origin detection helper, and total byte budget', () => {
