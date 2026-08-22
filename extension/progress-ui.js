@@ -12,6 +12,8 @@
   let logEl;
   let timer = null;
   let startedAt = 0;
+  let currentStartedAt = 0;
+  let suppressedStartedAt = 0;
   let lastState = null;
   let hideTimer = null;
 
@@ -55,7 +57,10 @@
     detailEl = panel.querySelector('.detail');
     elapsedEl = panel.querySelector('.elapsed');
     logEl = panel.querySelector('.logs');
-    panel.querySelector('.close').addEventListener('click', () => destroyPanel());
+    panel.querySelector('.close').addEventListener('click', () => {
+      suppressedStartedAt = currentStartedAt;
+      destroyPanel();
+    });
   }
 
   function destroyPanel() {
@@ -87,17 +92,27 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  function resetForNewJob() {
+  function resetForNewJob(incomingStartedAt) {
     clearTimeout(hideTimer); hideTimer = null;
+    currentStartedAt = incomingStartedAt || Date.now();
+    suppressedStartedAt = 0;
     lastState = null;
     if (logEl) logEl.replaceChildren();
     if (panel) panel.dataset.state = 'running';
   }
 
   function updateProgress(data) {
-    ensurePanel();
-    if (data.stage === 'start') resetForNewJob();
-    else { clearTimeout(hideTimer); hideTimer = null; }
+    const incomingStartedAt = Number(data.startedAt) || 0;
+    if (data.stage === 'start') {
+      ensurePanel();
+      resetForNewJob(incomingStartedAt);
+    } else {
+      if (suppressedStartedAt && incomingStartedAt === suppressedStartedAt) return;
+      if (currentStartedAt && incomingStartedAt && incomingStartedAt !== currentStartedAt) return;
+      ensurePanel();
+      clearTimeout(hideTimer); hideTimer = null;
+      if (!currentStartedAt) currentStartedAt = incomingStartedAt || Date.now();
+    }
     if (!timer || data.stage === 'start') startClock(data.startedAt);
 
     const state = data.state || 'running';
