@@ -1,0 +1,392 @@
+(() => {
+  'use strict';
+
+  const deliveryApi = globalThis.Link2ContextDelivery;
+  const SEND_KEY = deliveryApi?.SEND_STORAGE_KEY || 'sendPreference';
+  const HANDOFF_KEY = deliveryApi?.STORAGE_KEY || 'handoffPreference';
+  const host = location.hostname.toLowerCase();
+  const qwenHost = host === 'chat.qwen.ai' || host.endsWith('.chat.qwen.ai')
+    || host === 'qwen.ai' || host.endsWith('.qwen.ai')
+    || host === 'tongyi.aliyun.com' || host.endsWith('.tongyi.aliyun.com');
+  const pendingPaste = [];
+  const attachmentAttempts = [];
+  let lastSubmitSnapshot = null;
+  let lastActiveEditor = null;
+  let qwenDocumentMode = false;
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function normalizedText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function singleUrl(text) {
+    const value = String(text || '').trim();
+    if (!value || /\s/.test(value) || value.length > 8192) return null;
+    try {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+      return url.href;
+    } catch { return null; }
+  }
+
+  function isEditable(el) {
+    if (!(el instanceof Element)) return false;
+    if (el instanceof HTMLTextAreaElement) return !el.disabled && !el.readOnly;
+    if (el instanceof HTMLInputElement) return /^(text|search|url)$/i.test(el.type) && !el.disabled && !el.readOnly;
+    return el.isContentEditable || el.getAttribute('contenteditable') === 'true'
+      || el.matches?.('[data-lexical-editor="true"], .ProseMirror');
+  }
+
+  function editorFromTarget(target) {
+    if (isEditable(target)) return target;
+    return target instanceof Element
+      ? target.closest('textarea,input[type="text"],input[type="search"],input[type="url"],[contenteditable="true"],[data-lexical-editor="true"],.ProseMirror')
+      : null;
+  }
+
+  function editorText(editor) {
+    if (!editor) return '';
+    if (editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement) return editor.value || '';
+    return editor.innerText || editor.textContent || '';
+  }
+
+  function visible(el) {
+    if (!(el instanceof Element) || !el.isConnected) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function newestComposer(preferred) {
+    if (preferred?.isConnected && isEditable(preferred) && visible(preferred)) return preferred;
+    const candidates = [...document.querySelectorAll(
+      'textarea,input[type="text"],input[type="search"],input[type="url"],[contenteditable="true"],[data-lexical-editor="true"],.ProseMirror',
+    )].filter((el) => isEditable(el) && visible(el));
+    return candidates.at(-1) || null;
+  }
+
+  function controlText(el) {
+    if (!(el instanceof Element)) return '';
+    return normalizedText([
+      el.getAttribute('aria-label'), el.getAttribute('title'), el.textContent,
+      el.getAttribute('data-testid'), el.getAttribute('name'),
+    ].filter(Boolean).join(' '));
+  }
+
+  function looksLikeSend(el) {
+    const button = el instanceof Element ? el.closest('button,[role="button"],input[type="submit"]') : null;
+    if (!button) return false;
+    if (button.tagName === 'BUTTON' && String(button.getAttribute('type')).toLowerCase() === 'submit') return true;
+    return /(^|\b)(send|submit|ask|发送|送出|提交|提问|发送消息|send message)(\b|$)/i.test(controlText(button));
+  }
+
+  function enabledSendButton(editor) {
+    const scope = editor?.closest?.('form') || editor?.parentElement?.parentElement?.parentElement || document;
+    const candidates = [...scope.querySelectorAll('button,[role="button"],input[type="submit"]'),
+      ...document.querySelectorAll('button,[role="button"],input[type="submit"]')];
+    return candidates.find((el) => looksLikeSend(el)
+      && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && visible(el)) || null;
+  }
+
+  function filenameHints(fileName) {
+    const fromApi = deliveryApi?.attachmentNameHints?.(fileName);
+    const name = String(fileName || '').trim();
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const hints = Array.isArray(fromApi) ? [...fromApi] : [];
+    if (stem.length >= 16) hints.push(stem.slice(0, 16));
+    if (stem.length >= 20) hints.push(stem.slice(0, 20));
+    if (stem.length >= 24) hints.push(stem.slice(0, 24));
+    return [...new Set(hints.map(normalizedText).filter((item) => item.length >= 12))];
+  }
+
+  function nodeShowsFile(node, fileName) {
+    if (!(node instanceof Node)) return false;
+    const text = normalizedText(node.textContent).toLowerCase();
+    if (!text) return false;
+    return filenameHints(fileName).some((hint) => text.includes(hint.toLowerCase()));
+  }
+
+  function candidateScopesForInput(input) {
+    const scopes = new Set();
+    if (lastActiveEditor) scopes.add(lastActiveEditor.closest?.('form') || lastActiveEditor.parentElement?.parentElement?.parentElement || document);
+    if (input?.closest?.('form')) scopes.add(input.closest('form'));
+    let editor = null;
+    const local = input?.closest?.('form') || input?.parentElement?.parentElement || document;
+    if (local?.querySelectorAll) {
+      const editors = [...local.querySelectorAll(
+        'textarea,input[type="text"],input[type="search"],input[type="url"],[contenteditable="true"],[data-lexical-editor="true"],.ProseMirror',
+      )].filter(isEditable);
+      editor = editors.at(-1) || null;
+    }
+    if (editor) scopes.add(editor.closest?.('form') || editor.parentElement?.parentElement?.parentElement || document);
+    scopes.add(document);
+    return [...scopes].filter(Boolean);
+  }
+
+  function mirrorAttachmentProof(attempt) {
+    if (attempt.confirmed) return;
+    attempt.confirmed = true;
+    for (const scope of attempt.scopes) {
+      if (!scope?.appendChild) continue;
+      const marker = document.createElement('span');
+      marker.dataset.l2cAttachmentProof = attempt.originalName;
+      marker.setAttribute('aria-hidden', 'true');
+      marker.style.cssText = 'display:none!important';
+      marker.textContent = attempt.originalName;
+      try { scope.appendChild(marker); } catch { /* detached/immutable scope */ }
+    }
+  }
+
+  function observeAttachmentNodes(nodes) {
+    const now = Date.now();
+    for (const attempt of attachmentAttempts) {
+      if (attempt.confirmed || now - attempt.startedAt > 20_000) continue;
+      if (nodes.some((node) => nodeShowsFile(node, attempt.actualName))) mirrorAttachmentProof(attempt);
+    }
+  }
+
+  function fileToPlainText(file) {
+    const dot = file.name.toLowerCase().endsWith('.md') ? file.name.length - 3 : -1;
+    const name = dot >= 0 ? `${file.name.slice(0, dot)}.txt` : `${file.name}.txt`;
+    return new File([file], name, { type: 'text/plain', lastModified: file.lastModified || Date.now() });
+  }
+
+  function handleSyntheticFileEvent(event) {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.type !== 'file' || event.isTrusted) return;
+    const original = input.files?.[0];
+    if (!original) return;
+
+    let actual = original;
+    if (qwenHost && qwenDocumentMode && /\.md$/i.test(original.name)) {
+      try {
+        actual = fileToPlainText(original);
+        const dt = new DataTransfer();
+        dt.items.add(actual);
+        input.files = dt.files;
+      } catch { actual = original; }
+    }
+
+    const existing = attachmentAttempts.find((item) => item.input === input
+      && item.originalName === original.name && Date.now() - item.startedAt < 2000);
+    if (!existing) {
+      attachmentAttempts.push({
+        input,
+        originalName: original.name,
+        actualName: actual.name,
+        scopes: candidateScopesForInput(input),
+        startedAt: Date.now(),
+        confirmed: false,
+      });
+      while (attachmentAttempts.length > 12) attachmentAttempts.shift();
+    }
+  }
+
+  function patchQwenFileInputs(root = document) {
+    if (!qwenHost || !qwenDocumentMode || !root?.querySelectorAll) return;
+    const inputs = [...root.querySelectorAll('input[type="file"]')];
+    if (root instanceof HTMLInputElement && root.type === 'file') inputs.unshift(root);
+    for (const input of inputs) {
+      if (input.dataset.l2cOriginalAccept === undefined) input.dataset.l2cOriginalAccept = input.getAttribute('accept') || '';
+      const current = input.getAttribute('accept') || '';
+      if (!/(\.md\b|text\/markdown)/i.test(current)) {
+        input.setAttribute('accept', [current, '.md', 'text/markdown', '.txt', 'text/plain'].filter(Boolean).join(','));
+      }
+    }
+  }
+
+  function restoreQwenFileInputs() {
+    for (const input of document.querySelectorAll('input[type="file"][data-l2c-original-accept]')) {
+      const original = input.dataset.l2cOriginalAccept || '';
+      if (original) input.setAttribute('accept', original);
+      else input.removeAttribute('accept');
+      delete input.dataset.l2cOriginalAccept;
+    }
+  }
+
+  async function refreshQwenMode() {
+    if (!qwenHost) return;
+    try {
+      const data = await chrome.storage.local.get(HANDOFF_KEY);
+      qwenDocumentMode = data[HANDOFF_KEY] === 'document';
+    } catch { qwenDocumentMode = false; }
+    if (qwenDocumentMode) patchQwenFileInputs(document);
+    else restoreQwenFileInputs();
+  }
+
+  function significantPrefix(text) {
+    const normalized = normalizedText(text);
+    if (normalized.length < 12) return normalized;
+    return normalized.slice(0, Math.min(72, normalized.length));
+  }
+
+  function snapshotForSubmit(editor, button = null) {
+    const text = editorText(editor);
+    return {
+      editor,
+      button,
+      beforeText: text,
+      prefix: significantPrefix(text),
+      startedAt: Date.now(),
+    };
+  }
+
+  function generatingEvidence() {
+    return [...document.querySelectorAll('button,[role="button"],[aria-label],[title]')].some((el) => {
+      if (!visible(el)) return false;
+      return /(^|\b)(stop|停止|终止|停止生成|stop generating)(\b|$)/i.test(controlText(el));
+    });
+  }
+
+  function submitEvidence(snapshot) {
+    if (!snapshot) return false;
+    const editor = newestComposer(snapshot.editor);
+    const afterText = normalizedText(editorText(editor));
+    const prefix = snapshot.prefix;
+    const body = normalizedText(document.body?.innerText || document.body?.textContent || '');
+    const composerChanged = !snapshot.editor?.isConnected || !afterText || afterText !== normalizedText(snapshot.beforeText);
+    const messageVisible = prefix.length >= 12 && body.includes(prefix);
+    return composerChanged && (messageVisible || generatingEvidence());
+  }
+
+  function successToast(text) {
+    let toast = document.getElementById('__link2context_toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = '__link2context_toast';
+      Object.assign(toast.style, {
+        position: 'fixed', right: '18px', bottom: '18px', zIndex: '2147483647',
+        maxWidth: '440px', padding: '10px 14px', borderRadius: '10px',
+        background: 'rgba(20,20,20,.92)', color: 'white', fontSize: '13px',
+        boxShadow: '0 4px 20px rgba(0,0,0,.25)', pointerEvents: 'none',
+      });
+      document.documentElement.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.style.outline = 'none';
+    setTimeout(() => toast.remove(), 3500);
+  }
+
+  async function sendModeIsAuto() {
+    try {
+      const data = await chrome.storage.local.get(SEND_KEY);
+      return String(data[SEND_KEY] || '').toLowerCase() === 'auto';
+    } catch { return false; }
+  }
+
+  async function reliableSubmit(preferredEditor = null) {
+    const editor = newestComposer(preferredEditor);
+    if (!editor) return false;
+    let button = enabledSendButton(editor);
+    for (let i = 0; !button && i < 16; i += 1) {
+      await sleep(250);
+      button = enabledSendButton(newestComposer(editor));
+    }
+    if (!button) return false;
+    const snapshot = snapshotForSubmit(editor, button);
+    lastSubmitSnapshot = snapshot;
+    button.click();
+    for (let i = 0; i < 12; i += 1) {
+      await sleep(250);
+      if (submitEvidence(snapshot)) return true;
+    }
+    return false;
+  }
+
+  function latestPendingPaste() {
+    const now = Date.now();
+    while (pendingPaste.length && now - pendingPaste[0].startedAt > 45_000) pendingPaste.shift();
+    return pendingPaste.at(-1) || null;
+  }
+
+  async function onProgress(payload) {
+    const stage = String(payload?.stage || '');
+    if (stage === 'ready-in-composer') {
+      const pending = latestPendingPaste();
+      if (!pending || pending.consumed || !(await sendModeIsAuto())) return;
+      pending.consumed = true;
+      const sent = await reliableSubmit(pending.editor);
+      if (sent) {
+        originalReporter?.({
+          stage: 'sent',
+          label: '已完成并发送 / Handoff complete and sent',
+          detail: 'V0.5.2 verified the submitted user message after a paste-triggered auto-send.',
+          state: 'success', level: '', log: 'Verified paste auto-send', code: '', errorStage: '',
+        });
+        successToast('Link2Context：已自动发送，并确认消息进入对话。');
+      }
+    }
+
+    if (stage === 'send-unconfirmed' && lastSubmitSnapshot) {
+      await sleep(350);
+      if (submitEvidence(lastSubmitSnapshot)) {
+        originalReporter?.({
+          stage: 'sent',
+          label: '已完成并发送 / Handoff complete and sent',
+          detail: 'V0.5.2 verified page-level send evidence after the legacy sender could not confirm it.',
+          state: 'success', level: '', log: 'Recovered false-negative send status', code: '', errorStage: '',
+        });
+        successToast('Link2Context：网页已实际发送，已纠正误报。');
+      }
+    }
+  }
+
+  const originalReporter = typeof globalThis.__link2contextReportProgress === 'function'
+    ? globalThis.__link2contextReportProgress.bind(globalThis)
+    : null;
+  if (originalReporter) {
+    globalThis.__link2contextReportProgress = (payload) => {
+      originalReporter(payload);
+      Promise.resolve(onProgress(payload)).catch(() => {});
+    };
+  }
+
+  document.addEventListener('paste', (event) => {
+    if (!event.isTrusted) return;
+    const editor = editorFromTarget(event.target);
+    if (!editor || normalizedText(editorText(editor))) return;
+    const url = singleUrl(event.clipboardData?.getData('text/plain') || '');
+    if (!url) return;
+    lastActiveEditor = editor;
+    pendingPaste.push({ editor, url, startedAt: Date.now(), consumed: false });
+    while (pendingPaste.length > 8) pendingPaste.shift();
+  }, true);
+
+  document.addEventListener('click', (event) => {
+    if (!looksLikeSend(event.target)) return;
+    const editor = newestComposer(editorFromTarget(event.target));
+    if (!editor) return;
+    lastActiveEditor = editor;
+    lastSubmitSnapshot = snapshotForSubmit(editor, event.target.closest?.('button,[role="button"],input[type="submit"]'));
+  }, true);
+
+  document.addEventListener('keydown', (event) => {
+    if (!event.isTrusted || event.key !== 'Enter') return;
+    const editor = editorFromTarget(event.target);
+    if (editor) lastActiveEditor = editor;
+  }, true);
+
+  document.addEventListener('input', handleSyntheticFileEvent, true);
+  document.addEventListener('change', handleSyntheticFileEvent, true);
+
+  const observer = new MutationObserver((records) => {
+    const added = [];
+    for (const record of records) {
+      for (const node of record.addedNodes || []) added.push(node);
+      if (record.type === 'characterData' && record.target?.parentElement) added.push(record.target.parentElement);
+    }
+    if (added.length) observeAttachmentNodes(added);
+    if (qwenHost && qwenDocumentMode) {
+      for (const node of added) if (node instanceof Element) patchQwenFileInputs(node);
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[HANDOFF_KEY]) refreshQwenMode().catch(() => {});
+  });
+  refreshQwenMode().catch(() => {});
+})();
