@@ -86,9 +86,11 @@ test('attack 12: synthetic paste cannot recursively trigger Link2Context URL int
   assert.match(listener, /!event\.isTrusted/);
 });
 
-test('attack 13: attachment send waits until the target UI visibly registers the filename', () => {
+test('attack 13: attachment send waits for a distinctive filename hint rather than requiring the full chip text', () => {
   assert.match(content, /async function waitForAttachmentReady/);
-  assert.match(content, /if \(fileName && text\.includes\(fileName\)\) return true/);
+  assert.match(content, /scopeContainsAttachmentName\(scope, fileName\)/);
+  assert.match(content, /attachmentNameHints/);
+  assert.doesNotMatch(content, /if \(fileName && text\.includes\(fileName\)\) return true;/);
   assert.match(content, /Attachment was not confirmed/);
 });
 
