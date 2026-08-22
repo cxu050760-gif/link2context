@@ -6,6 +6,7 @@
   const isBuiltInAiHost = (host) => BUILTIN_AI_HOSTS.some((known) => host === known || host.endsWith(`.${known}`));
   const deliveryApi = globalThis.Link2ContextDelivery;
   const DELIVERY_KEY = deliveryApi?.STORAGE_KEY || 'handoffPreference';
+  const SEND_KEY = deliveryApi?.SEND_STORAGE_KEY || 'sendPreference';
   const TEXT_HARD_LIMIT_CHARS = deliveryApi?.TEXT_HARD_LIMIT_CHARS || 250_000;
   const jobByEditor = new WeakMap();
   const host = location.hostname.toLowerCase();
@@ -165,6 +166,12 @@
     };
   }
 
+  function controlText(el) {
+    const meta = controlMeta(el);
+    return [meta.ariaLabel, meta.title, meta.textContent, meta.dataTestId, meta.name]
+      .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
   function looksLikeSend(el) {
     if (!(el instanceof Element)) return false;
     const button = el.closest('button,[role="button"],input[type="submit"]');
@@ -177,10 +184,29 @@
   }
 
   function looksLikeAttachment(el) {
-    const meta = controlMeta(el);
-    return /(attach|upload|file|附件|上传|文件)/i.test(
-      [meta.ariaLabel, meta.title, meta.textContent, meta.dataTestId, meta.name].filter(Boolean).join(' '),
-    );
+    return /(attach|file|附件|文件|upload|上传)/i.test(controlText(el));
+  }
+
+  function looksLikeAddMenu(el) {
+    const text = controlText(el);
+    return /^(\+|add|more|添加|更多|添加内容|更多功能)$/i.test(text)
+      || /(^|\b)(add|more)(\b|$)/i.test(text);
+  }
+
+  function attachmentControlScore(el) {
+    const text = controlText(el);
+    let score = 0;
+    if (/(attach|attachment|附件)/i.test(text)) score += 8;
+    if (/(file|文件)/i.test(text)) score += 7;
+    if (/(upload|上传)/i.test(text)) score += 3;
+    if (/(image|photo|图片|照片)/i.test(text)) score -= 4;
+    return score;
+  }
+
+  function bestAttachmentControl(controls) {
+    return controls.filter(looksLikeAttachment)
+      .map((el) => ({ el, score: attachmentControlScore(el) }))
+      .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   function findEditorNear(control) {
@@ -287,22 +313,61 @@
     const scope = editor.closest?.('form') || editor.parentElement?.parentElement?.parentElement || document;
     let input = candidateFileInput(scope, fileName, mime);
     if (input) return input;
-    const controls = [...scope.querySelectorAll('button,[role="button"],[aria-label],[title]')];
-    const attach = controls.find(looksLikeAttachment);
+
+    const localControls = [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')];
+    let attach = bestAttachmentControl(localControls);
+    if (!attach && qwenHost) attach = localControls.find(looksLikeAddMenu) || null;
     if (attach) {
       attach.click();
       await new Promise((resolve) => setTimeout(resolve, 350));
       input = candidateFileInput(scope, fileName, mime) || candidateFileInput(document, fileName, mime);
+      if (input) return input;
+
+      // Qwen/Tongyi often puts “upload file” behind a generic + / more menu.
+      // Only after the user has explicitly chosen document delivery do we open
+      // that menu and prefer a file/attachment action over image-only actions.
+      if (qwenHost) {
+        const menuControls = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')];
+        const nestedAttach = bestAttachmentControl(menuControls.filter((el) => el !== attach));
+        if (nestedAttach) {
+          nestedAttach.click();
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          input = candidateFileInput(scope, fileName, mime) || candidateFileInput(document, fileName, mime);
+        }
+      }
     }
     return input || candidateFileInput(document, fileName, mime);
+  }
+
+  function fallbackAttachmentNameHints(fileName) {
+    const name = String(fileName || '').trim();
+    if (!name) return [];
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const hints = [name, stem];
+    if (stem.length >= 12) hints.push(stem.slice(0, Math.min(24, stem.length)));
+    if (stem.length >= 28) hints.push(stem.slice(-16));
+    return [...new Set(hints.filter((item) => item.length >= 8))];
+  }
+
+  function attachmentNameHints(fileName) {
+    return deliveryApi?.attachmentNameHints?.(fileName) || fallbackAttachmentNameHints(fileName);
+  }
+
+  function scopeContainsAttachmentName(scope, fileName) {
+    const text = String(scope?.textContent || '').replace(/\s+/g, ' ').toLowerCase();
+    if (!text) return false;
+    return attachmentNameHints(fileName).some((hint) => text.includes(String(hint).toLowerCase()));
   }
 
   async function waitForAttachmentReady(editor, fileName, timeoutMs = 15_000) {
     const scope = editor.closest?.('form') || editor.parentElement?.parentElement?.parentElement || document;
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const text = scope.textContent || '';
-      if (fileName && text.includes(fileName)) return true;
+      // Some web AIs visually truncate the chip name (for example
+      // “workbuddy.link-8yp…”). Requiring the full filename caused a false
+      // HANDOFF_ERROR even though the attachment was already present.
+      if (scopeContainsAttachmentName(scope, fileName)) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return false;
@@ -317,7 +382,7 @@
     input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     const ready = await waitForAttachmentReady(editor, file.name);
-    if (!ready) throw new Error('附件未在网页 AI 中确认登记，已停止自动发送 / Attachment was not confirmed by the web AI; auto-send stopped');
+    if (!ready) throw new Error('附件未在网页 AI 中确认登记，已停止本次交付 / Attachment was not confirmed by the web AI; handoff stopped');
   }
 
   function documentNote(result, fileName) {
@@ -337,6 +402,16 @@
       return ['auto', 'document', 'text'].includes(data[DELIVERY_KEY]) ? data[DELIVERY_KEY] : 'auto';
     } catch {
       return 'auto';
+    }
+  }
+
+  async function getSendMode() {
+    try {
+      const data = await chrome.storage.local.get(SEND_KEY);
+      if (deliveryApi?.normalizeSendMode) return deliveryApi.normalizeSendMode(data[SEND_KEY]);
+      return data[SEND_KEY] === 'auto' ? 'auto' : 'manual';
+    } catch {
+      return 'manual';
     }
   }
 
@@ -529,7 +604,8 @@
               reportLocalProgress('sent', '已完成并发送 / Handoff complete and sent', `目标 / Target: ${result.targetHost || location.hostname}`, { state: 'success' });
             }
           } else {
-            reportLocalProgress('ready-in-composer', '内容已准备好 / Ready in composer', 'Link2Context 已完成抓取、清洗和页面交付。', { state: 'success' });
+            reportLocalProgress('ready-in-composer', '内容已准备好，等待手动发送 / Ready for manual send',
+              'Link2Context 已完成抓取、清洗和页面交付；请检查后手动点击发送。 / Handoff complete; review and send manually.', { state: 'success' });
           }
           resolve(true);
         } catch (error) {
@@ -564,26 +640,31 @@
     const url = singleUrl(event.clipboardData?.getData('text/plain') || '');
     if (!url) return;
     stopEvent(event);
+    // Paste only starts preparation. It never sends immediately, even when the
+    // user selected Auto-send. This avoids surprising sends during testing.
     startJob(editor, url);
   }, true);
 
-  document.addEventListener('keydown', (event) => {
+  document.addEventListener('keydown', async (event) => {
     if (!siteEnabled || !event.isTrusted || event.isComposing || event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
     const editor = editableFromEventTarget(event.target);
     if (!editor) return;
     const existing = jobByEditor.get(editor);
     if (existing?.busy) {
       stopEvent(event);
-      existing.autoSubmit = true;
+      const autoSubmit = (await getSendMode()) === 'auto';
+      if (autoSubmit) existing.autoSubmit = true;
+      else showToast('内容处理完成后会停在输入框，请检查后再手动发送。 / Will stop for manual review.');
       return;
     }
     const url = singleUrl(editorText(editor));
     if (!url) return;
     stopEvent(event);
-    startJob(editor, url, { autoSubmit: true });
+    const autoSubmit = (await getSendMode()) === 'auto';
+    startJob(editor, url, { autoSubmit });
   }, true);
 
-  document.addEventListener('click', (event) => {
+  document.addEventListener('click', async (event) => {
     if (!siteEnabled || !event.isTrusted || !looksLikeSend(event.target)) return;
     const button = event.target.closest?.('button,[role="button"],input[type="submit"]') || event.target;
     const editor = findEditorNear(button);
@@ -591,14 +672,20 @@
     const existing = jobByEditor.get(editor);
     if (existing?.busy) {
       stopEvent(event);
-      existing.autoSubmit = true;
-      existing.submitter = button;
+      const autoSubmit = (await getSendMode()) === 'auto';
+      if (autoSubmit) {
+        existing.autoSubmit = true;
+        existing.submitter = button;
+      } else {
+        showToast('内容处理完成后会停在输入框，请检查后再手动发送。 / Will stop for manual review.');
+      }
       return;
     }
     const url = singleUrl(editorText(editor));
     if (!url) return;
     stopEvent(event);
-    startJob(editor, url, { autoSubmit: true, submitter: button });
+    const autoSubmit = (await getSendMode()) === 'auto';
+    startJob(editor, url, { autoSubmit, submitter: autoSubmit ? button : null });
   }, true);
 
   function refreshSiteStatus() {
