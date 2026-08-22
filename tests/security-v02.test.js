@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { validatePublicHttpUrl } from '../extension/core/url-safety.js';
 import { workBuddyJsonToMarkdown } from '../extension/core/normalize.js';
+import { MAX_EDITOR_PAYLOAD_CHARS, planContextHandoff } from '../extension/core/auto-bridge.js';
 
 test('IPv4 unusual numeric notation normalizes into blocked loopback', () => {
   assert.throws(() => validatePublicHttpUrl('http://2130706433/'), /blocked|禁止/);
@@ -78,9 +79,12 @@ test('single-line fields require nearby send control before paste interception',
   assert.match(src, /!isLikelyComposer\(editor\)/);
 });
 
-test('background converts oversized text context into Markdown attachment', () => {
+test('background still converts globally oversized text context into Markdown attachment', () => {
+  const plan = planContextHandoff({ targetHost: 'chat.deepseek.com', sourceKind: 'generic', payloadChars: MAX_EDITOR_PAYLOAD_CHARS });
+  assert.equal(plan.mode, 'attachment');
+  assert.equal(plan.reason, 'global-editor-hard-limit');
   const src = fs.readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
-  assert.match(src, /payload\.length > MAX_EDITOR_PAYLOAD_CHARS/);
+  assert.match(src, /if \(handoff\.mode === 'attachment'\)/);
   assert.match(src, /mime: 'text\/markdown'/);
 });
 
