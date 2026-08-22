@@ -1,4 +1,4 @@
-import { decodeBytes, sniffTextKind, truncateText } from './core/fetch-policy.js';
+import { decodeBytes, sniffTextKind, truncateText, MAX_FETCH_BYTES } from './core/fetch-policy.js';
 import { fetchBoundedWithRetry } from './core/fetch-url.js';
 import { htmlToMarkdown } from './core/html-lite.js';
 import { jsonTextToMarkdown, textToMarkdown } from './core/normalize.js';
@@ -13,6 +13,7 @@ import {
 } from './core/auto-bridge.js';
 
 const CUSTOM_HOSTS_KEY = 'customAiHosts';
+const WORKBUDDY_STATIC_HOST = 'workbuddy-space-static.codebuddy.work';
 
 async function customHosts() {
   const data = await chrome.storage.local.get(CUSTOM_HOSTS_KEY);
@@ -61,16 +62,86 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+function validateWorkBuddyFallbackUrl(input) {
+  const url = validatePublicHttpUrl(input);
+  if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== WORKBUDDY_STATIC_HOST) {
+    throw new Error('WorkBuddy browser fallback only allows the official static host / WorkBuddy 浏览器回退仅允许官方静态域名');
+  }
+  return url;
+}
+
+async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000 } = {}) {
+  const target = validateWorkBuddyFallbackUrl(input);
+  const created = await chrome.tabs.create({ url: target.href, active: false });
+  const tabId = created?.id;
+  if (!Number.isInteger(tabId)) throw new Error('Could not create background tab / 无法创建后台标签页');
+
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) {
+        validateWorkBuddyFallbackUrl(tab.url);
+      }
+      if (tab?.status === 'complete') {
+        const injected = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            href: location.href,
+            contentType: document.contentType || '',
+            text: document.body?.textContent || document.documentElement?.textContent || '',
+          }),
+        });
+        const page = injected?.[0]?.result;
+        if (!page) throw new Error('Background tab returned no readable page / 后台标签页没有可读取内容');
+        validateWorkBuddyFallbackUrl(page.href || target.href);
+        const text = String(page.text || '').trim();
+        if (!text) throw new Error('Background tab page was empty / 后台标签页内容为空');
+        const bytes = new TextEncoder().encode(text);
+        if (bytes.byteLength > MAX_FETCH_BYTES) {
+          throw new Error(`Response exceeds ${MAX_FETCH_BYTES} bytes / 响应超过大小上限`);
+        }
+        return {
+          res: null,
+          bytes,
+          finalUrl: page.href || target.href,
+          contentType: page.contentType || 'application/json',
+          navigationFallback: true,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+    throw new Error('Background-tab fallback timed out / 后台标签页读取超时');
+  } finally {
+    try { await chrome.tabs.remove(tabId); } catch { /* tab may already be gone */ }
+  }
+}
+
+async function fetchResolved(resolved) {
+  try {
+    return await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
+  } catch (directError) {
+    if (resolved.kind !== 'workbuddy') throw directError;
+    try {
+      return await readWorkBuddyViaBackgroundTab(resolved.fetchUrl);
+    } catch (fallbackError) {
+      const direct = String(directError?.message || directError || 'direct fetch failed');
+      const fallback = String(fallbackError?.message || fallbackError || 'background-tab fallback failed');
+      throw new Error(`${fallback}；原始 fetch 错误: ${direct}`);
+    }
+  }
+}
+
 async function resolveForAi(input) {
   const sourceUrl = validatePublicHttpUrl(input);
   const resolved = resolveSpecialUrl(sourceUrl);
-  const { res, bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
+  const { res, bytes, contentType } = await fetchResolved(resolved);
   const displayUrl = safeDisplayUrl(sourceUrl);
   const decoded = decodeBytes(bytes, contentType);
   const kind = resolved.kind === 'workbuddy' ? 'json' : sniffTextKind(contentType, decoded);
 
   if (kind === 'binary') {
-    const fileName = deriveFileName(sourceUrl.href, res.headers.get('content-disposition'), contentType);
+    const fileName = deriveFileName(sourceUrl.href, res?.headers?.get?.('content-disposition') || '', contentType);
     return {
       ok: true,
       kind: 'binary',
