@@ -31,6 +31,29 @@ async function senderIsAllowed(sender) {
   return isAllowedAiHost(host, await customHosts());
 }
 
+function makeProgressReporter(sender) {
+  const tabId = sender?.tab?.id;
+  const startedAt = Date.now();
+  return (stage, label, detail = '', extra = {}) => {
+    if (!Number.isInteger(tabId)) return;
+    const payload = {
+      type: 'L2C_PROGRESS', stage, label, detail, startedAt,
+      state: extra.state || 'running', level: extra.level || '', log: extra.log || label,
+    };
+    try {
+      const pending = chrome.tabs.sendMessage(tabId, payload);
+      pending?.catch?.(() => {});
+    } catch { /* content script may be reloading */ }
+  };
+}
+
+function humanBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
 function contentDispositionName(value) {
   if (!value) return '';
   const utf = /filename\*=UTF-8''([^;]+)/i.exec(value);
@@ -70,20 +93,23 @@ function validateWorkBuddyFallbackUrl(input) {
   return url;
 }
 
-async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000 } = {}) {
+async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000, report = () => {} } = {}) {
   const target = validateWorkBuddyFallbackUrl(input);
+  report('fallback-open', '直接抓取失败，启用浏览器回退 / Opening browser fallback', '正在后台打开 WorkBuddy 官方 JSON，不会抢占当前页面。', { level: 'warn' });
   const created = await chrome.tabs.create({ url: target.href, active: false });
   const tabId = created?.id;
   if (!Number.isInteger(tabId)) throw new Error('Could not create background tab / 无法创建后台标签页');
 
   try {
     const deadline = Date.now() + timeoutMs;
+    let lastReport = 0;
     while (Date.now() < deadline) {
       const tab = await chrome.tabs.get(tabId);
       if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) {
         validateWorkBuddyFallbackUrl(tab.url);
       }
       if (tab?.status === 'complete') {
+        report('fallback-extract', '后台页面已加载，正在提取 JSON / Page loaded; extracting JSON', '浏览器导航成功，正在读取页面文本。');
         const injected = await chrome.scripting.executeScript({
           target: { tabId },
           func: () => ({
@@ -101,6 +127,7 @@ async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000 } = {})
         if (bytes.byteLength > MAX_FETCH_BYTES) {
           throw new Error(`Response exceeds ${MAX_FETCH_BYTES} bytes / 响应超过大小上限`);
         }
+        report('fallback-extracted', '后台读取成功 / Browser fallback succeeded', `已读取 ${humanBytes(bytes.byteLength)}，准备解析。`);
         return {
           res: null,
           bytes,
@@ -108,6 +135,11 @@ async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000 } = {})
           contentType: page.contentType || 'application/json',
           navigationFallback: true,
         };
+      }
+      if (Date.now() - lastReport >= 2000) {
+        lastReport = Date.now();
+        const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        report('fallback-wait', '等待后台页面加载 / Waiting for background page', `页面状态：${tab?.status || 'unknown'}；剩余超时窗口约 ${remain}s。`);
       }
       await new Promise((resolve) => setTimeout(resolve, 180));
     }
@@ -117,13 +149,27 @@ async function readWorkBuddyViaBackgroundTab(input, { timeoutMs = 30_000 } = {})
   }
 }
 
-async function fetchResolved(resolved) {
+async function fetchResolved(resolved, report) {
+  report('direct-fetch', '正在直接抓取链接 / Direct fetch', '先走扩展后台受限 fetch；网络错误时会自动安全重试。');
   try {
-    return await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
+    const result = await fetchBoundedWithRetry(resolved.fetchUrl, {
+      attempts: 2,
+      onProgress: ({ stage, detail, level }) => {
+        if (stage === 'compatibility-retry') {
+          report('compatibility-retry', '严格抓取失败，正在兼容重试 / Compatibility retry', detail, { level: level || 'warn' });
+        } else if (stage === 'retry') {
+          report('direct-retry', '网络失败，正在重试 / Retrying fetch', detail, { level: level || 'warn' });
+        }
+      },
+    });
+    report('direct-ok', '直接抓取成功 / Direct fetch succeeded', `已读取 ${humanBytes(result.bytes?.byteLength)}。`);
+    return result;
   } catch (directError) {
+    const message = String(directError?.message || directError || 'direct fetch failed');
+    report('direct-failed', '直接抓取失败 / Direct fetch failed', message, { level: 'warn' });
     if (resolved.kind !== 'workbuddy') throw directError;
     try {
-      return await readWorkBuddyViaBackgroundTab(resolved.fetchUrl);
+      return await readWorkBuddyViaBackgroundTab(resolved.fetchUrl, { report });
     } catch (fallbackError) {
       const direct = String(directError?.message || directError || 'direct fetch failed');
       const fallback = String(fallbackError?.message || fallbackError || 'background-tab fallback failed');
@@ -132,16 +178,26 @@ async function fetchResolved(resolved) {
   }
 }
 
-async function resolveForAi(input) {
+async function resolveForAi(input, report) {
+  report('validate', '正在检查链接 / Validating URL', '检查协议、目标地址和安全边界。');
   const sourceUrl = validatePublicHttpUrl(input);
   const resolved = resolveSpecialUrl(sourceUrl);
-  const { res, bytes, contentType } = await fetchResolved(resolved);
+  if (resolved.kind === 'workbuddy') {
+    report('resolve-workbuddy', '识别为 WorkBuddy 分享链接 / WorkBuddy link detected', '已转换到官方 conversation-data.json 数据地址。');
+  } else {
+    report('resolve-generic', '识别为普通链接 / Generic link detected', '将按网页、JSON、文本或文件类型自动处理。');
+  }
+
+  const { res, bytes, contentType } = await fetchResolved(resolved, report);
+  report('decode', '正在识别内容类型 / Detecting content type', `响应大小 ${humanBytes(bytes.byteLength)}；Content-Type: ${contentType || '未提供 / unknown'}`);
   const displayUrl = safeDisplayUrl(sourceUrl);
   const decoded = decodeBytes(bytes, contentType);
   const kind = resolved.kind === 'workbuddy' ? 'json' : sniffTextKind(contentType, decoded);
 
   if (kind === 'binary') {
+    report('prepare-file', '正在准备附件 / Preparing attachment', '链接返回的是二进制文件，将尝试直接附加到网页 AI。');
     const fileName = deriveFileName(sourceUrl.href, res?.headers?.get?.('content-disposition') || '', contentType);
+    report('ready', '链接读取完成，正在交给网页 AI / Fetch complete; handing off', `已准备附件：${fileName}`, { state: 'success' });
     return {
       ok: true,
       kind: 'binary',
@@ -154,6 +210,7 @@ async function resolveForAi(input) {
     };
   }
 
+  report('normalize', '正在解析并整理内容 / Parsing and normalizing', resolved.kind === 'workbuddy' ? '正在提取 user / assistant 对话并跳过大块图片与工具数据。' : `检测类型：${kind}。`);
   let markdown;
   if (resolved.kind === 'workbuddy') {
     markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'workbuddy');
@@ -170,6 +227,7 @@ async function resolveForAi(input) {
     if (input.truncated) markdown += '\n\n> ⚠️ Source text was truncated by the safety limit. / 原始文本因安全上限被截断。';
   }
 
+  report('prepare-output', '正在准备给网页 AI 的内容 / Preparing AI context', `整理后约 ${humanBytes(new TextEncoder().encode(markdown).byteLength)}。`);
   const limited = truncateText(markdown);
   if (limited.truncated) limited.text += '\n\n> ⚠️ Output was truncated by the safety limit. / 输出因安全上限被截断。';
   const payload = buildContextPayload(limited.text, displayUrl);
@@ -178,6 +236,7 @@ async function resolveForAi(input) {
       ? `workbuddy-${sanitizeAttachmentName(resolved.shareCode)}.md`
       : 'link2context-context.md';
     const encoded = new TextEncoder().encode(limited.text);
+    report('ready', '内容较长，已转为 Markdown 附件 / Long content converted to attachment', `${fileName}，${humanBytes(encoded.byteLength)}；正在交给网页 AI。`, { state: 'success' });
     return {
       ok: true, kind: 'binary', sourceUrl: displayUrl, fileName, mime: 'text/markdown',
       size: encoded.byteLength, base64: bytesToBase64(encoded),
@@ -185,6 +244,7 @@ async function resolveForAi(input) {
       convertedFromText: true,
     };
   }
+  report('ready', '链接读取完成，正在交给网页 AI / Fetch complete; handing off', `最终上下文 ${payload.length.toLocaleString()} 字符。`, { state: 'success' });
   return {
     ok: true,
     kind: resolved.kind === 'workbuddy' ? 'workbuddy' : kind,
@@ -205,6 +265,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'L2C_RESOLVE_URL') {
+    const report = makeProgressReporter(sender);
+    report('start', '开始处理链接 / Starting', 'Link2Context 已接管这条链接。');
     (async () => {
       if (!(await senderIsAllowed(sender))) {
         throw new Error('This site is not enabled for automatic Link2Context access / 当前网站未启用自动 Link2Context');
@@ -212,10 +274,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.userGesture !== true) {
         throw new Error('A real user gesture is required / 必须由真实用户操作触发');
       }
-      return resolveForAi(message.url);
+      return resolveForAi(message.url, report);
     })()
       .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      .catch((error) => {
+        const messageText = String(error?.message || error);
+        report('error', '处理失败 / Failed', messageText, { state: 'error' });
+        sendResponse({ ok: false, error: messageText });
+      });
     return true;
   }
 
