@@ -68,8 +68,12 @@ test('qwen-state 07: V0.6.1 syntax check still includes the proven Qwen fallback
 });
 
 test('qwen-state 08: live regression cannot pass on DOM visibility alone when user typing is what enables send', () => {
-  assert.match(bridge, /DOM-only ghost frequently disappears or/);
-  assert.match(bridge, /const send = findSendButton\(current\)/);
+  const edit = bridge.slice(bridge.indexOf('async function qwenBrowserEdit'), bridge.indexOf('function generatingEvidence'));
+  assert.match(edit, /signature\.every/);
+  assert.match(edit, /current\.blur\(\)/);
+  assert.match(edit, /current\.focus\(\)/);
+  assert.match(edit, /const send = findSendButton\(current\)/);
+  assert.match(edit, /if \(!send\) return null/);
   assert.match(bridge, /QWEN_EDITOR_STATE_UNCONFIRMED/);
   const binary = bridge.slice(bridge.indexOf('async function attachBinaryWithStateProof'), bridge.indexOf('function stopEvent'));
   assert.doesNotMatch(binary, /if \(filenameVisible\) return/);
