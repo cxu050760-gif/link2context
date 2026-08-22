@@ -28,11 +28,15 @@ test('authorized fallback is a router for 401, 403 and render-shell failures', (
   assert.match(background, /pagination-browser-fallback/);
 });
 
-test('generic browser navigation revalidates both requested and final public URLs', () => {
+test('generic browser navigation validates public URLs and pins final navigation to the requested origin', () => {
   const background = read('extension/background.js');
   const section = background.slice(background.indexOf('async function readViaAuthorizedBrowser'), background.indexOf('async function fetchResolved'));
-  assert.match(section, /validatePublicHttpUrl\(input\)/);
-  assert.match(section, /validatePublicHttpUrl\(page\.href \|\| tab\.url \|\| target\.href\)/);
+  assert.match(section, /const target = validatePublicHttpUrl\(input\)/);
+  assert.match(section, /expectedOrigin = target\.origin/);
+  assert.match(section, /const checked = validatePublicHttpUrl\(value\)/);
+  assert.match(section, /checked\.origin !== expectedOrigin/);
+  assert.match(section, /BROWSER_CONTEXT_CROSS_ORIGIN_NAVIGATION/);
+  assert.match(section, /requireExpectedOrigin\(page\.href \|\| tab\.url \|\| target\.href\)/);
 });
 
 test('authorized use is visibly reported and does not call the cookies API directly', () => {
@@ -42,12 +46,13 @@ test('authorized use is visibly reported and does not call the cookies API direc
   assert.doesNotMatch(background, /chrome\.cookies/);
 });
 
-test('binary fallback fetch happens inside the authorized target tab with credentials include', () => {
+test('binary fallback fetch happens inside the authorized target tab with credentials include and redirects disabled', () => {
   const background = read('extension/background.js');
   const start = background.indexOf('async function readBinaryInsideAuthorizedTab');
   const end = background.indexOf('async function readViaAuthorizedBrowser');
   const section = background.slice(start, end);
   assert.match(section, /credentials: 'include'/);
+  assert.match(section, /redirect: 'error'/);
   assert.match(section, /MAX_FETCH_BYTES|limit/);
   assert.match(section, /response\.arrayBuffer\(\)/);
 });
