@@ -82,13 +82,17 @@ test('attachment filename hints include a truncated-chip-safe distinctive prefix
   assert.ok(hints.includes(stem.slice(0, 24)));
 });
 
-test('manifest loads V0.5.3 policy, Qwen state adapter, then generic runtime without legacy stacked runtimes', () => {
+test('manifest loads V0.6 structured owners before proven V0.5.3 fallback runtimes', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const scripts = manifest.content_scripts[0].js;
+  assert.equal(manifest.version, '0.6.0');
+  assert.ok(manifest.permissions.includes('offscreen'));
   assert.equal(scripts[0], 'progress-ui.js');
   assert.ok(scripts.indexOf('progress-ui.js') < scripts.indexOf('delivery-mode.js'));
-  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('qwen-state-bridge-v053.js'));
-  assert.ok(scripts.indexOf('qwen-state-bridge-v053.js') < scripts.indexOf('content-script-v053.js'));
+  assert.ok(scripts.indexOf('delivery-mode.js') < scripts.indexOf('qianwen-structured-v06.js'));
+  assert.ok(scripts.indexOf('qianwen-structured-v06.js') < scripts.indexOf('qianwen-cdp-v053.js'));
+  assert.ok(scripts.indexOf('content-script-v06.js') < scripts.indexOf('content-script-v053.js'));
+  assert.ok(scripts.indexOf('qianwen-cdp-v053.js') < scripts.indexOf('qwen-state-bridge-v053.js'));
   assert.ok(!scripts.includes('handoff-reliability-v052.js'));
   assert.ok(!scripts.includes('content-script-v051.js'));
 });
