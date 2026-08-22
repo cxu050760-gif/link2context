@@ -23,6 +23,21 @@ test('progress panel shows elapsed time, history, success and persistent error s
   assert.match(ui, /hideTimer = setTimeout/);
 });
 
+test('progress panel isolates a new job from stale old-job messages', () => {
+  const ui = read('extension/progress-ui.js');
+  assert.match(ui, /currentStartedAt/);
+  assert.match(ui, /incomingStartedAt !== currentStartedAt/);
+  assert.match(ui, /resetForNewJob/);
+  assert.match(ui, /logEl\.replaceChildren\(\)/);
+});
+
+test('closing the panel suppresses the current job until a new start arrives', () => {
+  const ui = read('extension/progress-ui.js');
+  assert.match(ui, /suppressedStartedAt = currentStartedAt/);
+  assert.match(ui, /incomingStartedAt === suppressedStartedAt/);
+  assert.match(ui, /suppressedStartedAt = 0/);
+});
+
 test('background reports important fetch, WorkBuddy fallback and parsing stages', () => {
   const background = read('extension/background.js');
   for (const stage of [
