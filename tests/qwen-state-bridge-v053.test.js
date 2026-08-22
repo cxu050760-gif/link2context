@@ -36,7 +36,10 @@ test('qwen-state 03: visible text is not enough; focus reconciliation and an ena
 });
 
 test('qwen-state 04: the old synthetic text-file route is no longer used for ordinary Qwen text', () => {
-  const flow = bridge.slice(bridge.indexOf('async function start('), bridge.indexOf("document.addEventListener('link2context:cancel'"));
+  const startIndex = bridge.indexOf('async function start(');
+  const endIndex = bridge.indexOf("  document.addEventListener('link2context:cancel'", startIndex);
+  assert.ok(startIndex >= 0 && endIndex > startIndex);
+  const flow = bridge.slice(startIndex, endIndex);
   assert.match(flow, /const originalBinary = result\.kind === 'binary' && !result\.convertedFromText/);
   assert.match(flow, /qwenBrowserEdit/);
   assert.doesNotMatch(flow, /qwenTextFile/);
