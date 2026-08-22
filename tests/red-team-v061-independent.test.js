@@ -53,7 +53,8 @@ test('round A: authorized legacy browser acquisition is pinned to the originally
   const auth = section(background, 'async function readViaAuthorizedBrowser', 'async function fetchResolved');
   assert.match(auth, /expectedOrigin\s*=\s*target\.origin/);
   assert.match(auth, /BROWSER_CONTEXT_CROSS_ORIGIN_NAVIGATION/);
-  assert.match(auth, /expectedOrigin/);
+  assert.match(auth, /checked\.origin !== expectedOrigin/);
+  assert.match(auth, /requireExpectedOrigin\(page\.href \|\| tab\.url \|\| target\.href\)/);
 });
 
 test('round A: credentialed binary re-fetch rejects redirects instead of following them', () => {
@@ -68,8 +69,9 @@ test('round B: V0.6-to-legacy fallback shares job identity and STOP reaches both
     const resolve = section(source, 'async function resolveUrl', 'async function preference');
     assert.match(resolve, /L2C_RESOLVE_URL['"][\s\S]*startedAt/);
     const cancel = section(source, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
-    assert.match(cancel, /L2C_CANCEL_JOB_V06/);
-    assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt/);
+    assert.match(cancel, /const startedAt = activeJob\.startedAt/);
+    assert.match(cancel, /L2C_CANCEL_JOB_V06['"][\s\S]*\{ startedAt \}/);
+    assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*\{ startedAt \}/);
   }
   assert.match(background, /makeProgressReporter\(sender,\s*message\.startedAt\)/);
 });
@@ -77,7 +79,9 @@ test('round B: V0.6-to-legacy fallback shares job identity and STOP reaches both
 test('round B: legacy V0.5.3 owner propagates STOP to its background job with exact identity', () => {
   const start = section(legacyContent, 'async function startJob', "document.addEventListener('link2context:cancel'");
   assert.match(start, /startedAt:\s*Date\.now\(\)/);
-  assert.match(start, /L2C_RESOLVE_URL['"][\s\S]*startedAt:\s*job\.startedAt/);
+  assert.match(start, /resolveUrl\(url, job\.startedAt\)/);
+  const resolve = section(legacyContent, 'async function resolveUrl', 'async function handoffPreference');
+  assert.match(resolve, /L2C_RESOLVE_URL['"][\s\S]*startedAt/);
   const cancel = section(legacyContent, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
   assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt:\s*activeJob\.startedAt/);
 });
@@ -96,9 +100,13 @@ test('round C: attachment inputs and reveal controls fail closed when disabled o
   for (const source of [generic, qianwen]) {
     const input = section(source, 'function fileInput(editor, file, baseline = null)', 'async function reveal');
     assert.match(input, /!input\.disabled/);
+    assert.match(input, /aria-disabled/);
+    assert.match(input, /inputAccepts\(input, file\)/);
+    const safeControl = section(source, 'function safeAttachmentControl', '\n  function fileInput');
+    assert.match(safeControl, /aria-disabled/);
+    assert.match(safeControl, /submit/);
     const reveal = section(source, 'async function reveal', '\n  function filename');
-    assert.match(reveal, /aria-disabled/);
-    assert.match(reveal, /type[^\n]*submit|submit[^\n]*type/i);
+    assert.match(reveal, /safeAttachmentControl/);
   }
 });
 
@@ -136,9 +144,13 @@ test('round C: hostile triple-backticks cannot break out of an external code blo
 test('round C: loaded V0.5.3 Qwen/Qianwen fallback files never bypass site accept or disabled contracts', () => {
   for (const source of [legacyQianwenCdp, legacyQwenState]) {
     assert.doesNotMatch(source, /removeAttribute\(['"]accept['"]\)/);
+    const helper = section(source, 'function usableFileInput(input, file)', '\n  function attachment');
+    assert.match(helper, /!input\.disabled/);
+    assert.match(helper, /aria-disabled/);
+    assert.match(helper, /inputAccepts\(input, file\)/);
     const inputSearch = section(source, 'async function findFileInput', '\n  function filename');
-    assert.match(inputSearch, /!input\.disabled/);
-    assert.match(inputSearch, /inputAccepts\(input, file\)/);
+    assert.match(inputSearch, /usableFileInput\(input, file\)/);
+    assert.match(inputSearch, /!candidate\.disabled/);
   }
 });
 
@@ -147,7 +159,9 @@ test('round C: loaded V0.5.3 Qwen/Qianwen owners propagate exact STOP identity t
     const startNeedle = source === legacyQianwenCdp ? 'async function start(editor, url)' : 'async function start(editor, url';
     const start = section(source, startNeedle, "document.addEventListener('link2context:cancel'");
     assert.match(start, /startedAt:\s*Date\.now\(\)/);
-    assert.match(start, /L2C_RESOLVE_URL['"][\s\S]*startedAt:\s*job\.startedAt/);
+    assert.match(start, /resolveUrl\(url, job\.startedAt\)/);
+    const resolve = section(source, 'async function resolveUrl', 'async function autoSendEnabled');
+    assert.match(resolve, /L2C_RESOLVE_URL['"][\s\S]*startedAt/);
     const cancel = section(source, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
     assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt:\s*activeJob\.startedAt/);
   }
