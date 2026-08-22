@@ -123,13 +123,17 @@ export function detectResourceType({ bytes, contentType = '', url = '' } = {}) {
   const extensionMime = EXTENSION_MIME.get(ext) || '';
   const extensionKind = kindForMime(extensionMime);
   const declaredKind = kindForMime(declaredMime);
+  const textLike = looksLikeTextBytes(bytes);
+  const genericDeclared = !declaredMime || declaredMime === 'application/octet-stream' || declaredKind === 'binary';
 
-  if (extensionMime && !['text','html','json'].includes(extensionKind)) {
+  // A binary extension is only a fallback when bytes look binary or the server supplied no useful MIME.
+  // Real textual HTML/JSON error/challenge pages must not be disguised as a PDF/image solely by URL suffix.
+  if (extensionMime && !['text','html','json'].includes(extensionKind) && (!textLike || genericDeclared)) {
     return { kind: extensionKind, mime: extensionMime, extension: ext, reason: `extension:${ext}`, declaredMime };
   }
 
   if (declaredMime && declaredKind !== 'binary') {
-    if (!looksLikeTextBytes(bytes)) {
+    if (!textLike) {
       return { kind: 'binary', mime: 'application/octet-stream', extension: ext, reason: `binary-bytes-despite-mime:${declaredMime}`, declaredMime };
     }
     if (declaredKind === 'json' || declaredKind === 'html') {
@@ -138,7 +142,7 @@ export function detectResourceType({ bytes, contentType = '', url = '' } = {}) {
     return sniffText(bytes, declaredMime);
   }
 
-  if (looksLikeTextBytes(bytes)) return { ...sniffText(bytes, declaredMime), extension: ext, declaredMime };
+  if (textLike) return { ...sniffText(bytes, declaredMime), extension: ext, declaredMime };
 
   const mime = declaredMime && declaredMime !== 'application/octet-stream' ? declaredMime : (extensionMime || 'application/octet-stream');
   return { kind: kindForMime(mime), mime, extension: ext, reason: declaredMime ? `mime:${declaredMime}` : 'unknown-binary', declaredMime };
