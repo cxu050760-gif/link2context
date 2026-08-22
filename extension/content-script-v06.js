@@ -271,7 +271,7 @@
 
   function fileInput(file) {
     const all = [...document.querySelectorAll('input[type="file"]')];
-    return all.find((input) => inputAccepts(input, file)) || all[0] || null;
+    return all.find((input) => inputAccepts(input, file)) || null;
   }
 
   async function revealFileInput(editor, file, job) {
@@ -306,19 +306,12 @@
   async function attachFile(file, editor, job) {
     assertActive(job);
     const input = await revealFileInput(editor, file, job);
-    if (!input) return false;
-    const oldAccept = input.getAttribute('accept');
-    if (!inputAccepts(input, file)) input.removeAttribute('accept');
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    } finally {
-      if (oldAccept === null) input.removeAttribute('accept');
-      else input.setAttribute('accept', oldAccept);
-    }
+    if (!input || !inputAccepts(input, file)) return false;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
