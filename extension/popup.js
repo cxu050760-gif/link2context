@@ -14,6 +14,7 @@ const BROWSER_CONTEXT_KEY = 'authorizedBrowserContext';
 const BROWSER_CONTEXT_DENY_KEY = 'browserContextDeniedHosts';
 const deliveryApi = globalThis.Link2ContextDelivery;
 const HANDOFF_PREFERENCE_KEY = deliveryApi?.STORAGE_KEY || 'handoffPreference';
+const SEND_PREFERENCE_KEY = deliveryApi?.SEND_STORAGE_KEY || 'sendPreference';
 
 function setStatus(msg, isError = false) {
   $('status').textContent = msg;
@@ -82,6 +83,26 @@ async function saveHandoffPreference() {
   const mode = deliveryApi?.normalizeMode?.($('handoffPreference').value) || $('handoffPreference').value;
   await chrome.storage.local.set({ [HANDOFF_PREFERENCE_KEY]: mode });
   $('handoffPreferenceHint').textContent = handoffHint(mode);
+}
+
+function sendHint(mode) {
+  if (mode === 'auto') return '自动发送：只有当你原本按 Enter 或点击发送来提交那个链接时，处理成功后才会自动继续发送；单纯粘贴链接不会立即发出去。';
+  return '手动确认：Link2Context 先把文档或长文本准备好并停在输入框里，你检查后再点一次发送。适合测试，也避免误发。';
+}
+
+async function refreshSendPreferenceUi() {
+  const data = await chrome.storage.local.get(SEND_PREFERENCE_KEY);
+  const mode = deliveryApi?.normalizeSendMode?.(data[SEND_PREFERENCE_KEY])
+    || (data[SEND_PREFERENCE_KEY] === 'auto' ? 'auto' : 'manual');
+  $('sendPreference').value = mode;
+  $('sendPreferenceHint').textContent = sendHint(mode);
+}
+
+async function saveSendPreference() {
+  const mode = deliveryApi?.normalizeSendMode?.($('sendPreference').value)
+    || ($('sendPreference').value === 'auto' ? 'auto' : 'manual');
+  await chrome.storage.local.set({ [SEND_PREFERENCE_KEY]: mode });
+  $('sendPreferenceHint').textContent = sendHint(mode);
 }
 
 function parseDeniedHosts(value) {
@@ -199,6 +220,7 @@ $('toggleSite').addEventListener('click', async () => {
   await refreshSiteUi();
 });
 $('handoffPreference').addEventListener('change', saveHandoffPreference);
+$('sendPreference').addEventListener('change', saveSendPreference);
 $('toggleBrowserContext').addEventListener('click', toggleBrowserContext);
 $('saveDeniedHosts').addEventListener('click', saveDeniedHosts);
 $('convert').addEventListener('click', convert);
@@ -214,4 +236,4 @@ $('save').addEventListener('click', async () => {
   finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
 });
 
-Promise.all([refreshSiteUi(), refreshHandoffPreferenceUi(), refreshBrowserContextUi()]).catch(() => {});
+Promise.all([refreshSiteUi(), refreshHandoffPreferenceUi(), refreshSendPreferenceUi(), refreshBrowserContextUi()]).catch(() => {});
