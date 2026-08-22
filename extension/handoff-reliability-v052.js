@@ -14,6 +14,7 @@
   const ATTACHMENT_ATTEMPT_TTL_MS = 20_000;
   const ATTACHMENT_PROOF_TTL_MS = 6_000;
   const SUBMIT_EVIDENCE_TTL_MS = 15_000;
+  const OWNED_UI_SELECTORS = '#__link2context_progress_root,#__link2context_toast,[data-l2c-attachment-proof]';
   let lastSubmitSnapshot = null;
   let lastActiveEditor = null;
   let qwenDocumentMode = false;
@@ -79,19 +80,42 @@
     ].filter(Boolean).join(' '));
   }
 
-  function looksLikeSend(el) {
-    const button = el instanceof Element ? el.closest('button,[role="button"],input[type="submit"]') : null;
+  function buttonFromElement(el) {
+    return el instanceof Element ? el.closest('button,[role="button"],input[type="submit"]') : null;
+  }
+
+  function strongSendSemantics(el) {
+    const button = buttonFromElement(el);
     if (!button) return false;
-    if (button.tagName === 'BUTTON' && String(button.getAttribute('type')).toLowerCase() === 'submit') return true;
-    return /(^|\b)(send|submit|ask|发送|送出|提交|提问|发送消息|send message)(\b|$)/i.test(controlText(button));
+    return /(^|\b)(send|ask|发送|送出|提问|发送消息|send message)(\b|$)/i.test(controlText(button));
+  }
+
+  function looksLikeSend(el) {
+    return strongSendSemantics(el);
+  }
+
+  function enabledControl(el) {
+    return Boolean(el && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && visible(el));
   }
 
   function enabledSendButton(editor) {
-    const scope = editor?.closest?.('form') || editor?.parentElement?.parentElement?.parentElement || document;
-    const candidates = [...scope.querySelectorAll('button,[role="button"],input[type="submit"]'),
-      ...document.querySelectorAll('button,[role="button"],input[type="submit"]')];
-    return candidates.find((el) => looksLikeSend(el)
-      && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && visible(el)) || null;
+    const form = editor?.closest?.('form') || null;
+    if (form) {
+      const local = [...form.querySelectorAll('button,[role="button"],input[type="submit"]')]
+        .find((el) => enabledControl(el)
+          && (strongSendSemantics(el) || (el.matches('button,input') && String(el.getAttribute('type')).toLowerCase() === 'submit')));
+      if (local) return local;
+    }
+
+    const localScope = form || editor?.parentElement?.parentElement?.parentElement || null;
+    if (localScope) {
+      const localStrong = [...localScope.querySelectorAll('button,[role="button"],input[type="submit"]')]
+        .find((el) => enabledControl(el) && strongSendSemantics(el));
+      if (localStrong) return localStrong;
+    }
+
+    return [...document.querySelectorAll('button,[role="button"],input[type="submit"]')]
+      .find((el) => enabledControl(el) && strongSendSemantics(el)) || null;
   }
 
   function filenameHints(fileName) {
@@ -106,8 +130,17 @@
     return [...new Set(hints.map(normalizedText).filter((item) => item.length >= 12))];
   }
 
+  function ownedUiNode(node) {
+    if (!(node instanceof Node)) return true;
+    const element = node instanceof Element ? node : node.parentElement;
+    if (!element) return false;
+    if (element.matches?.(OWNED_UI_SELECTORS) || element.closest?.(OWNED_UI_SELECTORS)) return true;
+    const rootNode = element.getRootNode?.();
+    return Boolean(rootNode instanceof ShadowRoot && rootNode.host?.matches?.('#__link2context_progress_root'));
+  }
+
   function nodeShowsFile(node, fileName) {
-    if (!(node instanceof Node)) return false;
+    if (!(node instanceof Node) || ownedUiNode(node)) return false;
     const text = normalizedText(node.textContent).toLowerCase();
     if (!text) return false;
     return filenameHints(fileName).some((hint) => text.includes(hint.toLowerCase()));
@@ -155,10 +188,12 @@
   }
 
   function observeAttachmentNodes(nodes) {
+    const safeNodes = nodes.filter((node) => !ownedUiNode(node));
+    if (!safeNodes.length) return;
     const now = Date.now();
     for (const attempt of attachmentAttempts) {
       if (attempt.confirmed || now - attempt.startedAt > ATTACHMENT_ATTEMPT_TTL_MS) continue;
-      if (nodes.some((node) => nodeShowsFile(node, attempt.actualName))) mirrorAttachmentProof(attempt);
+      if (safeNodes.some((node) => nodeShowsFile(node, attempt.actualName))) mirrorAttachmentProof(attempt);
     }
   }
 
@@ -257,9 +292,16 @@
 
   function generatingEvidence() {
     return [...document.querySelectorAll('button,[role="button"],[aria-label],[title]')].some((el) => {
-      if (!visible(el)) return false;
+      if (!visible(el) || ownedUiNode(el)) return false;
       return /(^|\b)(stop|停止|终止|停止生成|stop generating)(\b|$)/i.test(controlText(el));
     });
+  }
+
+  function bodyTextWithoutOwnedUi() {
+    const clone = document.body?.cloneNode?.(true);
+    if (!(clone instanceof Element)) return '';
+    for (const owned of clone.querySelectorAll(OWNED_UI_SELECTORS)) owned.remove();
+    return normalizedText(clone.innerText || clone.textContent || '');
   }
 
   function submitEvidence(snapshot) {
@@ -267,9 +309,9 @@
     const editor = newestComposer(snapshot.editor);
     const afterText = normalizedText(editorText(editor));
     const beforeText = normalizedText(snapshot.beforeText);
-    const body = normalizedText(document.body?.innerText || document.body?.textContent || '');
-    const composerChanged = !snapshot.editor?.isConnected || afterText !== beforeText;
-    const composerCleared = !snapshot.editor?.isConnected || !afterText;
+    const body = bodyTextWithoutOwnedUi();
+    const composerChanged = afterText !== beforeText;
+    const composerCleared = Boolean(editor && !afterText);
     const signature = Array.isArray(snapshot.signature) ? snapshot.signature.filter((item) => item.length >= 12) : [];
     const bodyHasMessage = signature.length > 0 && signature.every((fragment) => body.includes(fragment));
     const composerStillHasMessage = signature.length > 0 && signature.every((fragment) => afterText.includes(fragment));
@@ -340,6 +382,34 @@
     if (pending) pending.consumed = true;
   }
 
+  function unconfirmedPayload(detail) {
+    return {
+      stage: 'send-unconfirmed',
+      label: '未确认发送 / Send not confirmed',
+      detail,
+      state: 'error', level: '', log: 'Send was not independently confirmed',
+      code: 'SEND_UNCONFIRMED', errorStage: 'HANDOFF',
+    };
+  }
+
+  async function verifyLegacySent(payload) {
+    const snapshot = lastSubmitSnapshot;
+    if (!snapshot || Date.now() - snapshot.startedAt > SUBMIT_EVIDENCE_TTL_MS) {
+      originalReporter?.(unconfirmedPayload('The legacy sender reported success without a fresh V0.5.2 submit snapshot; success was suppressed fail-closed.'));
+      successToast('Link2Context：未取得足够发送证据，已阻止成功误报。', true);
+      return;
+    }
+    for (let i = 0; i < 12; i += 1) {
+      if (submitEvidence(snapshot)) {
+        originalReporter?.(payload);
+        return;
+      }
+      await sleep(250);
+    }
+    originalReporter?.(unconfirmedPayload('The page changed during send, but V0.5.2 found no independent evidence that the user message entered the conversation.'));
+    successToast('Link2Context：页面发生变化，但未确认消息真正进入对话；请手动检查。', true);
+  }
+
   async function onProgress(payload) {
     const stage = String(payload?.stage || '');
 
@@ -368,12 +438,7 @@
         });
         successToast('Link2Context：已自动发送，并确认消息进入对话。');
       } else {
-        originalReporter?.({
-          stage: 'send-unconfirmed',
-          label: '未确认发送 / Send not confirmed',
-          detail: 'V0.5.2 prepared the content but could not verify a safe auto-send. The message remains available for manual review.',
-          state: 'error', level: '', log: 'Paste auto-send was not confirmed', code: 'SEND_UNCONFIRMED', errorStage: 'HANDOFF',
-        });
+        originalReporter?.(unconfirmedPayload('V0.5.2 prepared the content but could not verify a safe auto-send. The message remains available for manual review.'));
         successToast('Link2Context：自动发送未确认，内容已保留在输入框，请手动发送。', true);
       }
     }
@@ -398,6 +463,12 @@
     : null;
   if (originalReporter) {
     globalThis.__link2contextReportProgress = (payload) => {
+      if (String(payload?.stage || '') === 'sent') {
+        Promise.resolve(verifyLegacySent(payload)).catch(() => {
+          originalReporter(unconfirmedPayload('V0.5.2 could not complete independent send verification.'));
+        });
+        return;
+      }
       originalReporter(payload);
       Promise.resolve(onProgress(payload)).catch(() => {});
     };
@@ -419,7 +490,7 @@
     const editor = newestComposer(editorFromTarget(event.target) || lastActiveEditor);
     if (!editor) return;
     lastActiveEditor = editor;
-    lastSubmitSnapshot = snapshotForSubmit(editor, event.target.closest?.('button,[role="button"],input[type="submit"]'));
+    lastSubmitSnapshot = snapshotForSubmit(editor, buttonFromElement(event.target));
   }, true);
 
   document.addEventListener('keydown', (event) => {
@@ -439,7 +510,7 @@
     }
     if (added.length) observeAttachmentNodes(added);
     if (qwenHost && qwenDocumentMode) {
-      for (const node of added) if (node instanceof Element) patchQwenFileInputs(node);
+      for (const node of added) if (node instanceof Element && !ownedUiNode(node)) patchQwenFileInputs(node);
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
