@@ -12,7 +12,9 @@ test('bounded fetch reads a normal public response', async () => {
   assert.equal(new TextDecoder().decode(out.bytes), 'hello');
   assert.equal(seen[0].options.credentials, 'omit');
   assert.equal(seen[0].options.redirect, 'manual');
+  assert.equal(seen[0].options.referrerPolicy, 'no-referrer');
   assert.equal(seen[0].options.targetAddressSpace, 'public');
+  assert.equal(out.compatibilityFallback, false);
 });
 
 test('public redirect is followed and each target is revalidated', async () => {
@@ -59,9 +61,75 @@ test('network errors retry once', async () => {
   } });
   assert.equal(n, 2);
   assert.equal(new TextDecoder().decode(out.bytes), 'ok');
+  assert.equal(out.compatibilityFallback, false);
 });
 
-test('non-retryable HTTP 404 is not retried', async () => {
+test('strict address-space failure falls back once without targetAddressSpace for HTTPS proxy/fake-IP compatibility', async () => {
+  const seen = [];
+  const out = await fetchBoundedWithRetry('https://example.com/data', {
+    attempts: 1,
+    fetchFn: async (_url, options) => {
+      seen.push(options);
+      if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');
+      return response('proxy-ok');
+    },
+  });
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].targetAddressSpace, 'public');
+  assert.equal('targetAddressSpace' in seen[1], false);
+  assert.equal(seen[1].credentials, 'omit');
+  assert.equal(seen[1].redirect, 'manual');
+  assert.equal(seen[1].referrerPolicy, 'no-referrer');
+  assert.equal(out.compatibilityFallback, true);
+  assert.equal(new TextDecoder().decode(out.bytes), 'proxy-ok');
+});
+
+test('proxy compatibility fallback can be disabled', async () => {
+  let n = 0;
+  await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
+    attempts: 1,
+    proxyCompatibilityFallback: false,
+    fetchFn: async () => { n += 1; throw new TypeError('Failed to fetch'); },
+  }), /Failed to fetch/);
+  assert.equal(n, 1);
+});
+
+test('proxy compatibility fallback is HTTPS-only', async () => {
+  let n = 0;
+  await assert.rejects(() => fetchBoundedWithRetry('http://example.com', {
+    attempts: 1,
+    fetchFn: async () => { n += 1; throw new TypeError('Failed to fetch'); },
+  }), /Failed to fetch/);
+  assert.equal(n, 1);
+});
+
+test('compatibility fallback still blocks private redirect before the second request', async () => {
+  let n = 0;
+  await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
+    attempts: 1,
+    fetchFn: async (_url, options) => {
+      n += 1;
+      if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');
+      return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/admin' } });
+    },
+  }), /blocked|禁止/);
+  assert.equal(n, 2);
+});
+
+test('compatibility fallback refuses HTTPS to HTTP downgrade redirects', async () => {
+  let n = 0;
+  await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
+    attempts: 1,
+    fetchFn: async (_url, options) => {
+      n += 1;
+      if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');
+      return new Response(null, { status: 302, headers: { location: 'http://example.org/plain' } });
+    },
+  }), /HTTPS-only|仅允许 HTTPS/);
+  assert.equal(n, 2);
+});
+
+test('non-retryable HTTP 404 is not retried or compatibility-fetched', async () => {
   let n = 0;
   await assert.rejects(() => fetchBoundedWithRetry('https://example.com', { attempts: 2, fetchFn: async () => {
     n += 1;
