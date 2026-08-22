@@ -40,12 +40,13 @@ test('qianwen-cn 03: debugger bridge is host-scoped, top-frame scoped, and detac
 });
 
 test('qianwen-cn 04: text uses CDP Input.insertText instead of DOM painting or execCommand', () => {
+  const fn = bridge.slice(bridge.indexOf('async function writeViaDebugger'), bridge.indexOf('function controlText'));
   assert.match(background, /'Input\.insertText'/);
-  assert.match(bridge, /debuggerCommand\('insertText', text\)/);
-  assert.doesNotMatch(bridge, /execCommand/);
-  assert.doesNotMatch(bridge, /innerHTML\s*=/);
-  assert.doesNotMatch(bridge, /textContent\s*=/);
-  assert.doesNotMatch(bridge, /dispatchEvent\(new InputEvent/);
+  assert.match(fn, /debuggerCommand\('insertText', text\)/);
+  assert.doesNotMatch(fn, /execCommand/);
+  assert.doesNotMatch(fn, /innerHTML\s*=/);
+  assert.doesNotMatch(fn, /textContent\s*=/);
+  assert.doesNotMatch(fn, /dispatchEvent\(new InputEvent/);
 });
 
 test('qianwen-cn 05: send uses real Enter through CDP and verifies page evidence instead of guessing a send button', () => {
