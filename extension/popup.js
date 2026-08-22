@@ -1,7 +1,7 @@
 import { validatePublicHttpUrl } from './core/url-safety.js';
 import { resolveSpecialUrl } from './core/workbuddy.js';
 import { decodeBytes, sniffTextKind, truncateText } from './core/fetch-policy.js';
-import { fetchBoundedWithRetry } from './core/fetch-url.js';
+import { fetchBounded, fetchBoundedWithRetry } from './core/fetch-url.js';
 import { htmlToMarkdown } from './core/html-lite.js';
 import { jsonTextToMarkdown, textToMarkdown } from './core/normalize.js';
 import { isKnownAiHost, normalizeHost } from './core/auto-bridge.js';
@@ -92,7 +92,7 @@ async function downloadOriginal() {
     setStatus('正在安全下载… / Fetching safely…');
     const sourceUrl = validatePublicHttpUrl($('url').value.trim());
     const resolved = resolveSpecialUrl(sourceUrl);
-    const { bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
+    const { bytes, contentType } = await fetchBounded(resolved.fetchUrl);
     const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
     const objectUrl = URL.createObjectURL(blob);
     const rawName = sourceUrl.pathname.split('/').filter(Boolean).pop() || (resolved.kind === 'workbuddy' ? 'conversation-data.json' : 'download.bin');
