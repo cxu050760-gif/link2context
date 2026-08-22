@@ -5,6 +5,8 @@ const UI_BLOCKS = /<(nav|footer|aside|form|dialog|menu|button|select)\b[^>]*>[\s
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const UI_WORDS = '(?:nav(?:igation)?|menu|sidebar|footer|toolbar|breadcrumb|language|login|sign[-_ ]?in|sign[-_ ]?up|cookie|modal|popover|drawer|masthead)';
 const UI_ATTR_BLOCK = new RegExp(`<([a-z][a-z0-9:-]*)\\b(?=[^>]*(?:id|class)\\s*=\\s*["'][^"']*${UI_WORDS}[^"']*["'])[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
+const PAGE_QUERY_KEY = /^(?:page|p|pg|pn|pageno|pageindex)$/i;
+const NEXT_LABEL = /(?:^|[\s\[（(>›»→:：_-])(?:下一页|下页|后一页|next(?:\s+page)?|older)(?:$|[\s\]）)<›»→:：.!！?？_-])/i;
 
 export const MAX_PAGINATION_PAGES = 8;
 
@@ -99,10 +101,14 @@ function attrValue(attrs, name) {
   return match?.[1] ?? match?.[2] ?? match?.[3] ?? '';
 }
 
-function pageFamily(url) {
-  const u = new URL(url.href);
+function asUrl(value) {
+  return value instanceof URL ? new URL(value.href) : new URL(String(value));
+}
+
+function pageFamily(value) {
+  const u = asUrl(value);
   for (const key of [...u.searchParams.keys()]) {
-    if (/^(?:page|p|pg|pn|pageno|pageindex)$/i.test(key)) u.searchParams.delete(key);
+    if (PAGE_QUERY_KEY.test(key)) u.searchParams.delete(key);
   }
   u.hash = '';
   u.pathname = u.pathname
@@ -112,12 +118,25 @@ function pageFamily(url) {
   return `${u.origin}${u.pathname}?${[...u.searchParams.entries()].sort().map(([k,v]) => `${k}=${v}`).join('&')}`;
 }
 
+function pageNumberFromUrl(value) {
+  let u;
+  try { u = asUrl(value); } catch { return null; }
+  for (const [key, val] of u.searchParams) {
+    if (PAGE_QUERY_KEY.test(key) && /^\d{1,4}$/.test(val)) return Number(val);
+  }
+  for (const re of [/[\/_-](\d{1,4})(?=\.(?:s?html?|php)$)/i, /\/page\/(\d{1,4})\/?$/i, /\/(\d{1,4})\/?$/]) {
+    const match = re.exec(u.pathname);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
 function safePaginationTarget(currentUrl, href, strongRelNext = false) {
   let current;
   let next;
   try {
-    current = new URL(currentUrl);
-    next = new URL(href, current);
+    current = asUrl(currentUrl);
+    next = new URL(decodeHtmlEntities(String(href || '').trim()), current);
   } catch { return null; }
   if (!['http:', 'https:'].includes(next.protocol) || next.username || next.password) return null;
   next.hash = '';
@@ -127,25 +146,78 @@ function safePaginationTarget(currentUrl, href, strongRelNext = false) {
   return next.href;
 }
 
-export function extractNextPageUrl(html, currentUrl) {
-  const source = String(html || '');
-  const links = [];
-  const re = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
+function markupCurrentPage(source) {
+  const current = /<(?:a|span|li|strong|em|b)\b([^>]*(?:aria-current\s*=\s*["']?page|class\s*=\s*["'][^"']*(?:current|active|selected)[^"']*["'])[^>]*)>([\s\S]*?)<\/(?:a|span|li|strong|em|b)\s*>/gi;
   let match;
-  while ((match = re.exec(source)) && links.length < 500) {
+  while ((match = current.exec(source))) {
+    const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').trim());
+    if (/^\d{1,4}$/.test(text)) return Number(text);
+  }
+  return null;
+}
+
+function pushCandidate(map, url, score, reason, pageNumber = null) {
+  if (!url) return;
+  const prior = map.get(url);
+  if (!prior || score > prior.score) map.set(url, { url, score, reason, pageNumber });
+}
+
+export function discoverNextPage(html, currentUrl) {
+  const source = String(html || '');
+  const candidates = new Map();
+
+  const linkRe = /<link\b([^>]*)>/gi;
+  let match;
+  while ((match = linkRe.exec(source))) {
+    const attrs = match[1] || '';
+    const rel = attrValue(attrs, 'rel');
+    if (!/(?:^|\s)next(?:\s|$)/i.test(rel)) continue;
+    const target = safePaginationTarget(currentUrl, attrValue(attrs, 'href'), true);
+    pushCandidate(candidates, target, 140, 'link-rel-next', pageNumberFromUrl(target));
+  }
+
+  const numeric = [];
+  const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
+  while ((match = anchorRe.exec(source)) && candidates.size < 800) {
     const attrs = match[1] || '';
     const href = attrValue(attrs, 'href');
     if (!href) continue;
     const rel = attrValue(attrs, 'rel');
     const text = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const aria = decodeHtmlEntities(attrValue(attrs, 'aria-label'));
+    const title = decodeHtmlEntities(attrValue(attrs, 'title'));
+    const classId = `${attrValue(attrs, 'class')} ${attrValue(attrs, 'id')}`;
+    const label = `${text} ${aria} ${title}`.trim();
     const strongRelNext = /(?:^|\s)next(?:\s|$)/i.test(rel);
-    const nextText = /^(?:下一页|下页|next(?:\s+page)?|older|›|»|→)$/i.test(text);
-    if (!strongRelNext && !nextText) continue;
+    const semanticNext = NEXT_LABEL.test(` ${label} `) || /(?:^|[-_\s])(next|pager-next|pagination-next)(?:$|[-_\s])/i.test(classId);
     const target = safePaginationTarget(currentUrl, href, strongRelNext);
-    if (target) links.push({ target, score: strongRelNext ? 100 : 80 });
+    if (!target) continue;
+    if (strongRelNext) pushCandidate(candidates, target, 130, 'anchor-rel-next', pageNumberFromUrl(target));
+    else if (semanticNext) pushCandidate(candidates, target, 110, 'semantic-next', pageNumberFromUrl(target));
+
+    if (/^\d{1,4}$/.test(text)) {
+      const pageNumber = Number(text);
+      if (pageNumber > 0) numeric.push({ url: target, pageNumber, family: pageFamily(target) });
+    }
   }
-  links.sort((a, b) => b.score - a.score);
-  return links[0]?.target || null;
+
+  const family = pageFamily(currentUrl);
+  const sameFamilyNumeric = numeric.filter((item) => item.family === family);
+  const distinctNumbers = [...new Set(sameFamilyNumeric.map((item) => item.pageNumber))].sort((a, b) => a - b);
+  let currentPage = pageNumberFromUrl(currentUrl) || markupCurrentPage(source);
+  if (!currentPage && distinctNumbers.length >= 3 && distinctNumbers[0] === 2) currentPage = 1;
+  if (currentPage && distinctNumbers.length >= 2) {
+    const nextNumber = distinctNumbers.find((n) => n === currentPage + 1)
+      ?? distinctNumbers.find((n) => n > currentPage);
+    const target = sameFamilyNumeric.find((item) => item.pageNumber === nextNumber);
+    if (target) pushCandidate(candidates, target.url, 80, 'numeric-pagination', target.pageNumber);
+  }
+
+  return [...candidates.values()].sort((a, b) => b.score - a.score || (a.pageNumber || Infinity) - (b.pageNumber || Infinity))[0] || null;
+}
+
+export function extractNextPageUrl(html, currentUrl) {
+  return discoverNextPage(html, currentUrl)?.url || null;
 }
 
 export function htmlToMarkdown(html, sourceUrl) {
