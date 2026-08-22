@@ -31,6 +31,18 @@ function debuggerFailure(error, code = 'DEBUGGER_FAILED') {
   };
 }
 
+async function requireCurrentDebuggerHost(tabId, predicate, code, label) {
+  const tab = await chrome.tabs.get(tabId);
+  let host = '';
+  try { host = new URL(tab?.url || '').hostname.toLowerCase(); } catch { /* fail below */ }
+  if (!host || !predicate(host)) {
+    const error = new Error(`${label} navigation changed before debugger input / 调试器输入前页面已跳转到非授权站点`);
+    error.debuggerCode = code;
+    throw error;
+  }
+  return host;
+}
+
 async function withDebugger(tabId, task, failurePrefix = 'DEBUGGER') {
   const target = { tabId };
   let attached = false;
@@ -39,6 +51,7 @@ async function withDebugger(tabId, task, failurePrefix = 'DEBUGGER') {
     attached = true;
     return await task(target);
   } catch (error) {
+    if (error?.debuggerCode) return debuggerFailure(error, error.debuggerCode);
     const message = String(error?.message || error || '');
     const code = /another debugger|already attached|debugger is already attached/i.test(message)
       ? `${failurePrefix}_BUSY`
@@ -58,18 +71,24 @@ async function insertTextViaDebugger(tabId, text) {
   return withDebugger(tabId, async (target) => {
     const chunkSize = 4_000;
     for (let i = 0; i < text.length; i += chunkSize) {
+      await requireCurrentDebuggerHost(
+        tabId, isManagedQianwenHost, 'QIANWEN_DEBUGGER_NAVIGATION_DENIED', 'Qianwen',
+      );
       await chrome.debugger.sendCommand(target, 'Input.insertText', { text: text.slice(i, i + chunkSize) });
     }
     return { ok: true };
   }, 'QIANWEN_DEBUGGER');
 }
 
-async function pressEnterViaDebugger(tabId, prefix = 'DEBUGGER') {
+async function pressEnterViaDebugger(tabId, prefix = 'DEBUGGER', predicate = () => false) {
+  const navigationCode = `${prefix}_NAVIGATION_DENIED`;
   return withDebugger(tabId, async (target) => {
     const common = {
       key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
     };
+    await requireCurrentDebuggerHost(tabId, predicate, navigationCode, prefix);
     await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...common });
+    await requireCurrentDebuggerHost(tabId, predicate, navigationCode, prefix);
     await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...common });
     return { ok: true };
   }, prefix);
@@ -102,7 +121,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { ok: false, errorCode: 'QIANWEN_DEBUGGER_NO_TAB', error: 'No sender tab / 无调用标签页' };
       if (message.action === 'insertText') return insertTextViaDebugger(tabId, message.text);
-      if (message.action === 'pressEnter') return pressEnterViaDebugger(tabId, 'QIANWEN_DEBUGGER');
+      if (message.action === 'pressEnter') return pressEnterViaDebugger(tabId, 'QIANWEN_DEBUGGER', isManagedQianwenHost);
       return { ok: false, errorCode: 'QIANWEN_DEBUGGER_ACTION_INVALID', error: 'Unsupported debugger action / 不支持的调试输入动作' };
     })().then(sendResponse).catch((error) => sendResponse(debuggerFailure(error, 'QIANWEN_DEBUGGER_FAILED')));
     return true;
@@ -118,7 +137,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!(await explicitAutoSendEnabled())) return { ok: false, errorCode: 'TARGET_DEBUGGER_AUTO_SEND_DISABLED', error: 'Auto-send is not explicitly enabled / 未显式开启自动发送' };
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { ok: false, errorCode: 'TARGET_DEBUGGER_NO_TAB', error: 'No sender tab / 无调用标签页' };
-      return pressEnterViaDebugger(tabId, 'TARGET_DEBUGGER');
+      return pressEnterViaDebugger(tabId, 'TARGET_DEBUGGER', isV06AutoSendFallbackHost);
     })().then(sendResponse).catch((error) => sendResponse(debuggerFailure(error, 'TARGET_DEBUGGER_FAILED')));
     return true;
   }
