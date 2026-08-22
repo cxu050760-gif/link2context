@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyContentType, enforceContentLength, MAX_FETCH_BYTES, sniffTextKind, truncateText } from '../extension/core/fetch-policy.js';
+import {
+  classifyContentType,
+  decodeBytes,
+  decodeBytesDetailed,
+  detectTextEncoding,
+  enforceContentLength,
+  MAX_FETCH_BYTES,
+  sniffTextKind,
+  truncateText,
+} from '../extension/core/fetch-policy.js';
 
 test('classifies common content types', () => {
   assert.equal(classifyContentType('application/json; charset=utf-8'), 'json');
@@ -30,14 +39,39 @@ test('truncation is explicit', () => {
   assert.equal(out.truncated, true);
 });
 
-test('decodes declared non-UTF8 text when the browser supports the charset', async () => {
-  const { decodeBytes } = await import('../extension/core/fetch-policy.js');
+test('decodes declared non-UTF8 text when the browser supports the charset', () => {
   const bytes = new Uint8Array([0x63, 0x61, 0x66, 0xe9]);
   assert.equal(decodeBytes(bytes, 'text/plain; charset=iso-8859-1'), 'café');
+  assert.deepEqual(detectTextEncoding(bytes, 'text/plain; charset=iso-8859-1'), {
+    charset: 'iso-8859-1', source: 'http-header', confidence: 'high',
+  });
 });
 
-test('falls back to UTF-8 for bogus charset labels', async () => {
-  const { decodeBytes } = await import('../extension/core/fetch-policy.js');
+test('V0.6 detects legacy HTML encoding from meta charset when HTTP omits it', () => {
+  const prefix = new TextEncoder().encode('<!doctype html><meta charset="gbk"><p>');
+  const suffix = new TextEncoder().encode('</p>');
+  const bytes = new Uint8Array(prefix.length + 4 + suffix.length);
+  bytes.set(prefix, 0);
+  bytes.set([0xd6, 0xd0, 0xce, 0xc4], prefix.length); // 中文 in GBK
+  bytes.set(suffix, prefix.length + 4);
+  const decoded = decodeBytesDetailed(bytes, 'text/html');
+  assert.equal(decoded.charset, 'gbk');
+  assert.equal(decoded.source, 'document-declaration');
+  assert.match(decoded.text, /中文/);
+});
+
+test('V0.6 BOM has priority over absent headers', () => {
+  const body = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('hello')]);
+  const decoded = decodeBytesDetailed(body, 'text/plain');
+  assert.equal(decoded.charset, 'utf-8');
+  assert.equal(decoded.source, 'bom');
+  assert.match(decoded.text, /hello/);
+});
+
+test('falls back to UTF-8 validity for bogus charset labels', () => {
   const bytes = new TextEncoder().encode('中文');
-  assert.equal(decodeBytes(bytes, 'text/plain; charset=definitely-not-a-real-charset'), '中文');
+  const decoded = decodeBytesDetailed(bytes, 'text/plain; charset=definitely-not-a-real-charset');
+  assert.equal(decoded.text, '中文');
+  assert.equal(decoded.charset, 'utf-8');
+  assert.equal(decoded.source, 'utf8-validity');
 });
