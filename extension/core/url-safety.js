@@ -1,4 +1,4 @@
-const SENSITIVE_QUERY_KEY = /(token|key|secret|signature|sig|auth|password|passwd|credential|session|jwt|api[-_]?key)/i;
+const SENSITIVE_QUERY_KEY = /(?:^|[-_.])(?:token|access[-_]?token|refresh[-_]?token|id[-_]?token|key|secret|client[-_]?secret|signature|sig|auth|authorization|password|passwd|credential|session|jwt|api[-_]?key|code|ticket)(?:$|[-_.])/i;
 
 function parseIpv4(host) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return null;
