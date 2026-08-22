@@ -71,6 +71,12 @@
       || document;
   }
 
+  function attachmentScope(editor) {
+    const scope = composerScope(editor);
+    if (scope !== document) return scope;
+    return editor?.parentElement || null;
+  }
+
   function stopEvent(event) {
     event.preventDefault();
     event.stopPropagation();
@@ -100,6 +106,7 @@
       globalThis.__link2contextReportProgress?.({
         stage, label, detail, state: extra.state || 'running', level: extra.level || '',
         log: extra.log || label, code: extra.code || '', errorStage: extra.errorStage || '',
+        startedAt: Number(extra.startedAt) || activeJob?.startedAt || Date.now(),
       });
     } catch { /* UI must not break handoff */ }
   }
@@ -140,8 +147,8 @@
     });
   }
 
-  async function resolveUrl(url) {
-    let result = await message('L2C_RESOLVE_URL_V06', { url, userGesture: true });
+  async function resolveUrl(url, startedAt) {
+    let result = await message('L2C_RESOLVE_URL_V06', { url, userGesture: true, startedAt });
     if (result?.ok && result.fallbackToLegacy) {
       report('v06-legacy-fallback', 'V0.6 保留已验证旧路径 / Using proven legacy path', result.reason || 'legacy fallback', { level: 'warn' });
       result = await message('L2C_RESOLVE_URL', { url, userGesture: true });
@@ -269,25 +276,33 @@
     return score;
   }
 
-  function fileInput(file) {
-    const all = [...document.querySelectorAll('input[type="file"]')];
-    return all.find((input) => inputAccepts(input, file)) || null;
+  function fileInput(editor, file, baseline = null) {
+    const scope = attachmentScope(editor);
+    if (scope) {
+      const local = [...scope.querySelectorAll('input[type="file"]')]
+        .find((input) => inputAccepts(input, file));
+      if (local) return local;
+    }
+    if (!baseline) return null;
+    return [...document.querySelectorAll('input[type="file"]')]
+      .find((input) => !baseline.has(input) && inputAccepts(input, file)) || null;
   }
 
   async function revealFileInput(editor, file, job) {
-    let input = fileInput(file);
+    let input = fileInput(editor, file);
     if (input) return input;
-    const scope = composerScope(editor);
-    const candidates = [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]'),
-      ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
-      .filter((el, index, arr) => visible(el) && arr.indexOf(el) === index)
+    const scope = attachmentScope(editor);
+    if (!scope) return null;
+    const baseline = new Set(document.querySelectorAll('input[type="file"]'));
+    const candidates = [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
+      .filter((el) => visible(el))
       .map((el) => ({ el, score: attachmentScore(el, file) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
     if (!candidates[0]) return null;
     candidates[0].el.click();
     await sleep(400, job);
-    input = fileInput(file);
+    input = fileInput(editor, file, baseline);
     return input;
   }
 
@@ -298,8 +313,10 @@
     return [...new Set([value, stem, stem.slice(0, 24)].filter((item) => item.length >= 7))];
   }
 
-  function filenameVisible(name) {
-    const text = normalize(document.body?.innerText || document.body?.textContent || '').toLowerCase();
+  function filenameVisible(name, editor) {
+    const scope = attachmentScope(editor);
+    if (!scope) return false;
+    const text = normalize(scope.innerText || scope.textContent || '').toLowerCase();
     return filenameHints(name).some((hint) => text.includes(hint.toLowerCase()));
   }
 
@@ -315,7 +332,7 @@
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
-      if (filenameVisible(file.name)) return true;
+      if (filenameVisible(file.name, editor)) return true;
       await sleep(250, job);
     }
     return false;
@@ -437,12 +454,21 @@
     activeJob = job;
     try {
       report('v06-handoff-start', 'V0.6 开始读取链接 / Starting structured handoff', `Target: ${host}`);
-      const result = await resolveUrl(url);
+      const result = await resolveUrl(url, job.startedAt);
       assertActive(job);
       if (!result?.ok) {
         const error = new Error(result?.error || '链接读取失败 / Failed to read link');
         error.l2cCode = result?.errorCode || 'PIPELINE_ERROR';
         throw error;
+      }
+
+      const upstreamPartial = Boolean(result.partial || result.sourcePartial || result.mediaPartial);
+      if (upstreamPartial) {
+        job.autoSubmit = false;
+        report('v06-upstream-partial', '源内容只取得部分，已禁用自动发送 / Source context is partial; auto-send disabled',
+          (Array.isArray(result.partialReasons) ? result.partialReasons.join('; ') : '') || 'partial context', {
+            level: 'warn', code: 'UPSTREAM_PARTIAL', errorStage: 'HANDOFF',
+          });
       }
 
       const primary = await preparePrimary(result, pref);
@@ -458,7 +484,7 @@
       if (failedAssets.length) {
         job.autoSubmit = false;
         report('v06-assets-partial', '部分图片未能交给当前 AI / Some media could not be attached', failedAssets.join(', '), {
-          state: 'error', level: 'warn', code: 'MEDIA_HANDOFF_PARTIAL', errorStage: 'HANDOFF',
+          level: 'warn', code: 'MEDIA_HANDOFF_PARTIAL', errorStage: 'HANDOFF',
         });
       }
 
@@ -494,8 +520,10 @@
         }
         report('sent', '已完成并发送 / Handoff complete and sent', `strategy=${sent.strategy}`, { state: 'success' });
         showToast(`Link2Context：已自动发送（${sent.strategy}）。`);
-      } else if (failedAssets.length) {
-        showToast(`Link2Context：正文已准备，但 ${failedAssets.length} 个图片附件失败；为避免信息缺失，已禁用自动发送。`, true);
+      } else if (failedAssets.length || upstreamPartial) {
+        report('ready-partial', '内容已部分准备，等待手动确认 / Partial context ready for manual review',
+          `upstreamPartial=${upstreamPartial}; failedAssets=${failedAssets.length}`, { state: 'success', level: 'warn', code: 'PARTIAL_READY' });
+        showToast(`Link2Context：内容已准备，但存在信息缺失（源内容部分=${upstreamPartial ? '是' : '否'}，附件失败=${failedAssets.length}）；已禁用自动发送。`, true);
       } else {
         report('ready-in-composer', '内容已完整准备，等待手动发送 / Ready for manual send', `正文 + ${attached} 个媒体资产`, { state: 'success' });
         showToast(attached ? `Link2Context：正文和 ${attached} 张关键图片已准备。` : 'Link2Context：结构化上下文已准备。');
