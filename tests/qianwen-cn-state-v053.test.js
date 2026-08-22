@@ -8,55 +8,70 @@ import { isKnownAiHost } from '../extension/core/auto-bridge.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
-const bridge = read('extension/qianwen-cn-state-bridge-v053.js');
+const bridge = read('extension/qianwen-cdp-v053.js');
+const background = read('extension/background-v053.js');
 const manifest = JSON.parse(read('extension/manifest.json'));
 const pkg = JSON.parse(read('package.json'));
 const scripts = manifest.content_scripts?.[0]?.js || [];
 
-test('qianwen-cn 01: current Chinese Qwen and QwenWork hosts are built-in AI targets', () => {
+test('qianwen-cn 01: current Chinese Qianwen and QwenWork hosts are built-in AI targets', () => {
   assert.equal(isKnownAiHost('qianwen.com'), true);
   assert.equal(isKnownAiHost('www.qianwen.com'), true);
   assert.equal(isKnownAiHost('qwenwork.cn'), true);
   assert.equal(isKnownAiHost('app.qwenwork.cn'), true);
 });
 
-test('qianwen-cn 02: dedicated Chinese adapter owns qianwen.com and qwenwork.cn before generic runtime', () => {
-  assert.match(bridge, /host === 'qianwen\.com'/);
-  assert.match(bridge, /host === 'qwenwork\.cn'/);
-  assert.ok(scripts.includes('qianwen-cn-state-bridge-v053.js'));
-  assert.ok(scripts.indexOf('qianwen-cn-state-bridge-v053.js') < scripts.indexOf('content-script-v053.js'));
+test('qianwen-cn 02: manifest explicitly grants debugger and routes Chinese Qianwen through CDP before generic runtime', () => {
+  assert.ok(manifest.permissions.includes('debugger'));
+  assert.equal(manifest.background.service_worker, 'background-v053.js');
+  assert.ok(scripts.includes('qianwen-cdp-v053.js'));
+  assert.ok(scripts.indexOf('qianwen-cdp-v053.js') < scripts.indexOf('content-script-v053.js'));
+  assert.ok(!scripts.includes('qianwen-cn-state-bridge-v053.js'));
 });
 
-test('qianwen-cn 03: pasted URL is intercepted once before the managed editor receives it', () => {
+test('qianwen-cn 03: debugger bridge is host-scoped, top-frame scoped, and detaches after each operation', () => {
+  assert.match(background, /import '\.\/background\.js'/);
+  assert.match(background, /message\.type !== QIANWEN_DEBUGGER_MESSAGE/);
+  assert.match(background, /sender\?\.frameId > 0/);
+  assert.match(background, /qianwen\.com/);
+  assert.match(background, /qwenwork\.cn/);
+  assert.match(background, /chrome\.debugger\.attach/);
+  assert.match(background, /chrome\.debugger\.detach/);
+});
+
+test('qianwen-cn 04: text uses CDP Input.insertText instead of DOM painting or execCommand', () => {
+  assert.match(background, /'Input\.insertText'/);
+  assert.match(bridge, /debuggerCommand\('insertText', text\)/);
+  assert.doesNotMatch(bridge, /execCommand/);
+  assert.doesNotMatch(bridge, /innerHTML\s*=/);
+  assert.doesNotMatch(bridge, /textContent\s*=/);
+  assert.doesNotMatch(bridge, /dispatchEvent\(new InputEvent/);
+});
+
+test('qianwen-cn 05: send uses real Enter through CDP and verifies page evidence instead of guessing a send button', () => {
+  assert.match(background, /'Input\.dispatchKeyEvent'/);
+  assert.match(background, /type: 'rawKeyDown'/);
+  assert.match(background, /type: 'keyUp'/);
+  assert.match(bridge, /debuggerCommand\('pressEnter'\)/);
+  assert.match(bridge, /generatingEvidence\(\)/);
+  assert.match(bridge, /bodyTextWithoutComposer\(\)/);
+});
+
+test('qianwen-cn 06: pasted URL is intercepted once and failed CDP state is fail-closed', () => {
   const listener = bridge.slice(bridge.indexOf("document.addEventListener('paste'"), bridge.indexOf("document.addEventListener('keydown'"));
   assert.match(listener, /event\.isTrusted/);
   assert.match(listener, /stopEvent\(event\)/);
   assert.match(bridge, /stopImmediatePropagation/);
+  assert.match(bridge, /QIANWEN_CDP_STATE_UNCONFIRMED/);
+  assert.match(background, /QIANWEN_DEBUGGER_BUSY/);
 });
 
-test('qianwen-cn 04: text handoff forbids DOM-paint fallback and requires site sendability', () => {
-  const fn = bridge.slice(bridge.indexOf('async function writeRealEditorState'), bridge.indexOf('function generatingEvidence'));
-  assert.match(fn, /execCommand\?\.\('insertText'/);
-  assert.doesNotMatch(fn, /innerHTML\s*=/);
-  assert.doesNotMatch(fn, /textContent\s*=/);
-  assert.doesNotMatch(fn, /dispatchEvent\(new InputEvent/);
-  assert.match(fn, /const button = findSendButton\(current\)/);
-  assert.match(fn, /if \(!button\) return null/);
-});
-
-test('qianwen-cn 05: unconfirmed editor state fails closed with the live regression code', () => {
-  assert.match(bridge, /QIANWEN_EDITOR_STATE_UNCONFIRMED/);
-  assert.match(bridge, /删不掉但发不出去的假文本/);
-});
-
-test('qianwen-cn 06: binary attachments remain files and also require a real send state', () => {
+test('qianwen-cn 07: binary resources remain files and package stays V0.5.3', () => {
   assert.match(bridge, /new File\(\[base64ToBytes\(result\.base64\)\]/);
+  assert.match(bridge, /new DataTransfer\(\)/);
   assert.match(bridge, /QIANWEN_ATTACHMENT_STATE_UNCONFIRMED/);
-  assert.match(bridge, /const button = findSendButton\(current \|\| editor\)/);
-});
-
-test('qianwen-cn 07: package syntax gate includes the adapter without bumping past V0.5.3', () => {
-  assert.match(pkg.scripts.check, /qianwen-cn-state-bridge-v053\.js/);
+  assert.match(pkg.scripts.check, /background-v053\.js/);
+  assert.match(pkg.scripts.check, /qianwen-cdp-v053\.js/);
   assert.equal(pkg.version, '0.5.3');
   assert.equal(manifest.version, '0.5.3');
 });
