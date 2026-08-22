@@ -42,7 +42,7 @@ test('attack 04: truncated attachment chips can be recognized by a distinctive f
 });
 
 test('attack 05: short generic fragments are not accepted as attachment proof', () => {
-  assert.deepEqual(api.attachmentNameHints('a.md'), []);
+  assert.equal(api.attachmentNameHints('a.md').length, 0);
 });
 
 test('attack 06: popup exposes manual review and auto-send as separate choices', () => {
