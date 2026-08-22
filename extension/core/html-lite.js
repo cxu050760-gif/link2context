@@ -86,7 +86,8 @@ export function assessHtmlContent(html) {
   const ratio = bodyChars / Math.max(raw.length, 1);
   const explicitShell = /<div\b[^>]*(?:id|class)=["'][^"']*(?:root|app|__next)[^"']*["'][^>]*>\s*<\/div>/i.test(raw)
     || /enable javascript|javascript is required|please turn on javascript/i.test(readable);
-  const shellOnly = (explicitShell && bodyChars < 400)
+  const shellOnly = bodyChars === 0
+    || (explicitShell && bodyChars < 400)
     || (raw.length > 3000 && bodyChars < 80)
     || (raw.length > 8000 && bodyChars < 220 && ratio < 0.01);
   return { shellOnly, readableChars: readable.length, bodyChars, ratio, title, readable };
