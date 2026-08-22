@@ -4,13 +4,15 @@ English | [中文](./README.md)
 
 **Send one URL in a web-AI chat. Link2Context fetches the resource in your browser, classifies it, cleans it into AI-ready context, and hands it to the current AI.**
 
+> Current test branch: **V0.5.2**. V0.5.1 separated delivery format from send behavior and hardened real-page attachment/Qwen handling. V0.5.2 adds an independent handoff-reliability layer and makes 401 / 403 / client-render browser-context fallback **off by default, explicitly authorized by the user, and deny-listable per host**.
+
 V0.4.0 explicitly separates the generic pipeline into:
 
 ```text
 Acquire → Classify → Render if needed → Extract → Handoff
 ```
 
-It is now **byte-first**: raw bytes, file signatures, MIME, and URL extensions are considered before text decoding. PDF, images, archives, Office files, audio/video, and unknown binary resources default to original-file attachments instead of being decoded into garbage text.
+It is **byte-first**: raw bytes, file signatures, MIME, and URL extensions are considered before text decoding. PDF, images, archives, Office files, audio/video, and unknown binary resources default to original-file attachments instead of being decoded into garbage text.
 
 V0.3 previously added clean ChatGPT/WorkBuddy conversation extraction, while V0.3.1 added target-aware delivery: ChatGPT is file-first for conversation sources and DeepSeek/other targets keep their stable short/medium inline path.
 
@@ -18,7 +20,28 @@ V0.3 previously added clean ChatGPT/WorkBuddy conversation extraction, while V0.
 
 1. Paste one HTTP(S) URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
 2. Press Enter or click Send.
-3. Link2Context intercepts → fetches locally → classifies → cleans/parses → chooses text or attachment from both resource type and target AI → uploads/injects → continues send.
+3. Link2Context intercepts → fetches locally → classifies → cleans/parses → chooses text or attachment from both resource type and target AI → uploads/injects.
+4. Since V0.5.1, send behavior is independent: manual review is the default, while auto-send is explicit opt-in. Merely pasting a URL never immediately sends it.
+5. If a public fetch gets 401 / 403 or only a client-render shell, V0.5.2 can continue through browser context only after you explicitly authorize that capability in the popup. Without authorization it fails closed instead of silently borrowing your logged-in session.
+
+## V0.5.2: authorized browser fallback and handoff reliability
+
+- **Browser context stays off by default.** Credential-free public fetching remains the first path. Only explicit popup authorization allows 401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` to route into the authorized browser fallback.
+- **Revocable and host-deny-listable.** Authorization is persisted for usability, but can be revoked globally; denied hosts never use the logged-in browser context even when the global capability is enabled.
+- **No direct cookie-value access.** Link2Context does not use `chrome.cookies` to read or store cookie values. Authorized fallback uses a browser tab's existing site context while retaining URL/final-URL, size, timeout, and access-control checks.
+- **Send success needs independent evidence.** Clicking a send button is not enough. V0.5.2 looks for independent page evidence such as composer clearing, the sent message appearing, or compatible generation state. Legacy false-positive success is suppressed fail-closed.
+- **Attachment evidence survives rerenders but expires.** MutationObserver mirrors only observed attachment proof into candidate scopes, with a TTL so stale proof cannot contaminate a later same-name upload.
+- **Qwen document fallback is narrowly gated.** Only Qwen/Tongyi + explicit document mode + extension-generated synthetic file events may adapt a Markdown attachment to plain-text filename/MIME; content stays unchanged and trusted user file events are not rewritten.
+- **Composer rerenders are recoverable.** Auto-send can re-resolve the newest composer while waiting for an enabled send control, but it never removes `disabled` / `aria-disabled`.
+- **Auto-send remains opt-in.** A failed auto-send is surfaced as `SEND_UNCONFIRMED`; it cannot quietly masquerade as intended manual mode.
+
+## V0.5.1: real-page delivery fixes
+
+- Delivery format: Auto / Markdown document / long text.
+- Send behavior: manual review (default, recommended) / auto-send.
+- Truncated attachment-chip filenames can be confirmed through distinctive filename hints instead of requiring the full filename to remain visible.
+- Qwen/Tongyi attachment discovery can open a generic `+ / More` menu and prefer file/attachment actions over image-only actions.
+- Managed Qwen editors remain fail-closed: safe Paste/Input paths are verified, direct DOM mutation is avoided, and disabled send controls are never force-enabled.
 
 ## V0.4: universal URL pipeline hardening
 
@@ -70,11 +93,11 @@ V0.4 can follow same-origin `rel=next` or explicit article pagination such as �
 - loop protection;
 - if a later page fails, already-fetched pages are preserved and output is marked `PARTIAL`.
 
-### Client-render shells: explicit failure, no silent session reuse
+### Client-render shells: fail closed by default, explicit browser-context fallback in V0.5+
 
-Large HTML with an empty `root/app/__next`, explicit JavaScript-required text, or almost no useful body content becomes `CLIENT_RENDER_CONTENT_MISSING / RENDER`.
+Large HTML with an empty `root/app/__next`, explicit JavaScript-required text, or almost no useful body content is classified as `CLIENT_RENDER_CONTENT_MISSING / RENDER`.
 
-**Generic browser navigation fallback is intentionally not enabled for arbitrary URLs.** Browser navigation may carry cookies and logged-in sessions. Silently reading private DOM and then handing it to another AI would create an unacceptable data-exfiltration boundary. Existing WorkBuddy and ChatGPT Share fallbacks remain pinned to their public-share hosts and paths.
+**Link2Context still never silently reuses a logged-in session.** Without authorization, it reports that browser-context authorization is required. After explicit user authorization, a controlled background tab may use the existing browser site context for that target; authorization can be revoked globally and denied for specific hosts. The separate WorkBuddy and ChatGPT Share fallbacks remain pinned to their exact public hosts/paths.
 
 ## V0.3: clean conversation extraction
 
@@ -93,7 +116,7 @@ For `https://chatgpt.com/share/...`, Link2Context decodes public turbo-stream/hy
 - **DeepSeek / other targets**: retain the 250,000-character global hard limit.
 - **PDF / image / archive / Office / audio/video / other binary**: original-file attachment.
 
-The progress panel now covers fetch, classification, pagination, page handoff, attachment confirmation, send, and typed terminal errors.
+The progress panel covers fetch, classification, pagination, page handoff, attachment confirmation, send, and typed terminal errors.
 
 ## Other link types
 
@@ -127,12 +150,15 @@ For another web AI, open the site, click Link2Context, and choose **Enable curre
 - `targetAddressSpace: public` requested when available;
 - response/time budgets enforced, including the global 12 MiB cap;
 - automatic fetch requires a real user gesture and verified destination-AI host;
-- WorkBuddy/ChatGPT Share browser fallbacks pinned to exact public hosts/paths;
-- fetched text explicitly marked untrusted external data, not instructions;
-- likely secret query parameters redacted;
-- ChatGPT serialized objects decoded into null-prototype objects;
+- **normal fetching does not use the logged-in browser session; generic browser-context fallback activates only after explicit user authorization and supports global revocation plus a host deny list;**
+- authorized fallback does not use `chrome.cookies` to directly read/store cookie values, and requested/final URLs remain revalidated;
+- WorkBuddy/ChatGPT Share public browser fallbacks remain pinned to exact public hosts/paths;
+- fetched text is explicitly marked untrusted external data, not instructions;
+- likely secret query parameters are redacted;
+- ChatGPT serialized objects are decoded into null-prototype objects;
 - attachment confirmation failure never fails open into a giant composer dump;
-- no bypass of authentication, CAPTCHAs, DRM, paywalls, or site access control.
+- authentication, CAPTCHAs, DRM, paywalls, and site access controls are not bypassed;
+- disabled / aria-disabled send controls are never force-enabled.
 
 See [SECURITY.md](./SECURITY.md).
 
@@ -144,6 +170,10 @@ npm run check
 ```
 
 V0.4 adds attacks around raw-byte classification, 401/403/404/429/5xx, network/timeouts, client-render shells, main-content cleaning, pagination escape/loops, and stage-preserving diagnostics, while retaining all V0.1–V0.3.1 regressions.
+
+V0.5.1 adds regressions for send-preference fail-safe behavior, accidental auto-send, truncated attachment names, Qwen add-menu/file targeting, disabled-send safety, manual-mode false failures, and managed-editor corruption boundaries.
+
+V0.5.2 adds independent send evidence, legacy-success suppression, attachment-proof TTL, composer rerender recovery, Qwen document-adaptation boundaries, explicit authorized browser-context fallback, host deny-list behavior, and cancellation propagation. Current GitHub Actions result: **288/288 tests PASS + `npm run check` PASS**.
 
 See:
 
@@ -157,7 +187,7 @@ See:
 
 “Any URL” means best-effort handling of **public, legitimate HTTP(S) resources permitted by browser/network policy**. It does not mean bypassing access control.
 
-A 403 is now accurately reported as `FETCH_BLOCKED_403`, but Link2Context does not claim to bypass the remote CDN. A 401 becomes `AUTH_REQUIRED_401`, without stealing logged-in cookies. Client-only SPAs are reported as missing rendered content instead of treating a title-only shell as success.
+403 / 401 keep their real failure stage. **Without explicit browser-context authorization, Link2Context does not silently borrow logged-in cookies.** After the user opts in, it may retry through the existing browser site context, but it still does not promise to pass login walls, CDNs, CAPTCHAs, DRM, paywalls, or other access controls. Client-only SPAs request authorization/report RENDER rather than pretending a title-only shell is success.
 
 ## License
 
