@@ -217,7 +217,10 @@ async function retrySeries(initialUrl, options, attempts, onProgress) {
 
 export async function fetchBoundedWithRetry(initialUrl, options = {}) {
   const attempts = Math.max(1, Number(options.attempts ?? DEFAULT_ATTEMPTS));
-  const proxyCompatibilityFallback = options.proxyCompatibilityFallback !== false;
+  // Dropping targetAddressSpace removes the browser's public-address guard and
+  // can turn DNS rebinding/proxy edge cases into private-network requests. Keep
+  // the compatibility retry available only to callers that explicitly opt in.
+  const proxyCompatibilityFallback = options.proxyCompatibilityFallback === true;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
   const { onProgress: _ignored, ...fetchOptions } = options;
 
