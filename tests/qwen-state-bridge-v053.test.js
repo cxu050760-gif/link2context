@@ -61,10 +61,10 @@ test('qwen-state 06: auto-send remains fail-closed and requires post-click evide
   assert.doesNotMatch(fn, /button\.click\(\);\s*return true/);
 });
 
-test('qwen-state 07: package syntax check includes the new adapter and version stays V0.5.3', () => {
+test('qwen-state 07: V0.6 syntax check still includes the proven Qwen fallback adapter', () => {
   assert.match(pkg.scripts.check, /qwen-state-bridge-v053\.js/);
-  assert.equal(pkg.version, '0.5.3');
-  assert.equal(manifest.version, '0.5.3');
+  assert.equal(pkg.version, '0.6.0');
+  assert.equal(manifest.version, '0.6.0');
 });
 
 test('qwen-state 08: live regression cannot pass on DOM visibility alone when user typing is what enables send', () => {
