@@ -3,16 +3,16 @@
   "name": "Link2Context",
   "version": "0.5.3",
   "description": "Paste a link into a web AI and Link2Context automatically fetches, cleans and injects the real content. / 在网页 AI 中只发链接，自动读取、清洗并注入真实内容。",
-  "permissions": ["downloads", "clipboardWrite", "storage", "activeTab", "tabs", "scripting"],
+  "permissions": ["downloads", "clipboardWrite", "storage", "activeTab", "tabs", "scripting", "debugger"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "background-v053.js",
     "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["progress-ui.js", "delivery-mode.js", "qianwen-cn-state-bridge-v053.js", "qwen-state-bridge-v053.js", "content-script-v053.js"],
+      "js": ["progress-ui.js", "delivery-mode.js", "qianwen-cdp-v053.js", "qwen-state-bridge-v053.js", "content-script-v053.js"],
       "run_at": "document_start",
       "all_frames": false
     }
