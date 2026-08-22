@@ -8,8 +8,10 @@ const CDP_PROTOCOL_VERSION = '1.3';
 const SEND_KEY = 'sendPreference';
 
 function senderHost(sender) {
-  try { return new URL(sender?.tab?.url || sender?.url || '').hostname.toLowerCase(); }
-  catch { return ''; }
+  try {
+    const url = new URL(sender?.tab?.url || sender?.url || '');
+    return url.protocol === 'https:' ? url.hostname.toLowerCase() : '';
+  } catch { return ''; }
 }
 
 function isManagedQianwenHost(host) {
@@ -33,10 +35,11 @@ function debuggerFailure(error, code = 'DEBUGGER_FAILED') {
 
 async function requireCurrentDebuggerHost(tabId, predicate, code, label) {
   const tab = await chrome.tabs.get(tabId);
-  let host = '';
-  try { host = new URL(tab?.url || '').hostname.toLowerCase(); } catch { /* fail below */ }
+  let current = null;
+  try { current = new URL(tab?.url || ''); } catch { /* fail below */ }
+  const host = current?.protocol === 'https:' ? current.hostname.toLowerCase() : '';
   if (!host || !predicate(host)) {
-    const error = new Error(String(label) + ' navigation changed before debugger input / 调试器输入前页面已跳转到非授权站点');
+    const error = new Error(String(label) + ' navigation changed before debugger input / 调试器输入前页面已跳转到非授权 HTTPS 站点');
     error.debuggerCode = code;
     throw error;
   }
@@ -45,22 +48,23 @@ async function requireCurrentDebuggerHost(tabId, predicate, code, label) {
 
 async function withDebugger(tabId, task, failurePrefix = 'DEBUGGER') {
   const target = { tabId };
-  let attached = false;
   try {
     await chrome.debugger.attach(target, CDP_PROTOCOL_VERSION);
-    attached = true;
-    return await task(target);
   } catch (error) {
-    if (error?.debuggerCode) return debuggerFailure(error, error.debuggerCode);
     const message = String(error?.message || error || '');
     const code = /another debugger|already attached|debugger is already attached/i.test(message)
       ? String(failurePrefix) + '_BUSY'
       : String(failurePrefix) + '_ATTACH_FAILED';
     return debuggerFailure(error, code);
+  }
+
+  try {
+    return await task(target);
+  } catch (error) {
+    if (error?.debuggerCode) return debuggerFailure(error, error.debuggerCode);
+    return debuggerFailure(error, String(failurePrefix) + '_COMMAND_FAILED');
   } finally {
-    if (attached) {
-      try { await chrome.debugger.detach(target); } catch { /* tab may have closed */ }
-    }
+    try { await chrome.debugger.detach(target); } catch { /* tab may have closed */ }
   }
 }
 
@@ -116,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const host = senderHost(sender);
       if (!isManagedQianwenHost(host)) {
-        return { ok: false, errorCode: 'QIANWEN_DEBUGGER_HOST_DENIED', error: 'Debugger input is restricted to qianwen.com / qwenwork.cn / 调试输入仅限千问域名' };
+        return { ok: false, errorCode: 'QIANWEN_DEBUGGER_HOST_DENIED', error: 'Debugger input is restricted to HTTPS qianwen.com / qwenwork.cn / 调试输入仅限 HTTPS 千问域名' };
       }
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { ok: false, errorCode: 'QIANWEN_DEBUGGER_NO_TAB', error: 'No sender tab / 无调用标签页' };
@@ -133,7 +137,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender?.frameId > 0) return { ok: false, errorCode: 'TARGET_DEBUGGER_FRAME_DENIED', error: 'Only top frame auto-send fallback is allowed / 仅顶层页面可使用自动发送回退' };
       if (message.action !== 'pressEnter') return { ok: false, errorCode: 'TARGET_DEBUGGER_ACTION_DENIED', error: 'Only Enter is exposed for V0.6 target fallback / V0.6 目标回退仅允许 Enter' };
       const host = senderHost(sender);
-      if (!isV06AutoSendFallbackHost(host)) return { ok: false, errorCode: 'TARGET_DEBUGGER_HOST_DENIED', error: 'Target debugger fallback is not allowed on this host / 当前站点不允许调试器发送回退' };
+      if (!isV06AutoSendFallbackHost(host)) return { ok: false, errorCode: 'TARGET_DEBUGGER_HOST_DENIED', error: 'Target debugger fallback is restricted to supported HTTPS AI hosts / 调试器发送回退仅限受支持的 HTTPS AI 站点' };
       if (!(await explicitAutoSendEnabled())) return { ok: false, errorCode: 'TARGET_DEBUGGER_AUTO_SEND_DISABLED', error: 'Auto-send is not explicitly enabled / 未显式开启自动发送' };
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { ok: false, errorCode: 'TARGET_DEBUGGER_NO_TAB', error: 'No sender tab / 无调用标签页' };
