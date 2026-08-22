@@ -5,6 +5,7 @@ const MAX_DECODE_DEPTH = 80;
 const MAX_DECODE_SLOTS = 250_000;
 const MAX_SEARCH_NODES = 120_000;
 const MAX_ORDERED_NODES = 10_000;
+const LARGE_BASE64_TEXT = 256_000;
 
 function readJsonStringLiteral(source, quoteAt) {
   if (source[quoteAt] !== '"') return null;
@@ -16,11 +17,8 @@ function readJsonStringLiteral(source, quoteAt) {
     }
     if (source[i] === '"') {
       const literal = source.slice(quoteAt, i + 1);
-      try {
-        return { value: JSON.parse(literal), end: i + 1 };
-      } catch {
-        return null;
-      }
+      try { return { value: JSON.parse(literal), end: i + 1 }; }
+      catch { return null; }
     }
     i += 1;
   }
@@ -84,7 +82,9 @@ class PositionalDecoder {
       this.memo.set(index, value);
       for (const item of node) value.push(this.resolveEdge(item, depth + 1));
     } else if (node && typeof node === 'object') {
-      value = {};
+      // External share data controls object keys. A null-prototype object prevents
+      // __proto__/constructor keys from mutating decoder or page prototypes.
+      value = Object.create(null);
       this.memo.set(index, value);
       for (const [rawKey, rawValue] of Object.entries(node)) {
         let key = rawKey;
@@ -93,7 +93,12 @@ class PositionalDecoder {
           const resolvedKey = this.resolveEdge(keyIndex, depth + 1);
           key = typeof resolvedKey === 'string' ? resolvedKey : String(resolvedKey ?? rawKey);
         }
-        value[key] = this.resolveEdge(rawValue, depth + 1);
+        Object.defineProperty(value, key, {
+          value: this.resolveEdge(rawValue, depth + 1),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
     } else {
       value = node;
@@ -107,17 +112,15 @@ class PositionalDecoder {
 
 function decodePromiseLines(lines) {
   const promises = new Map();
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
     const match = /^P(\d+):(.*)$/.exec(line);
     if (!match) continue;
     const index = Number(match[1]);
     try {
       const body = JSON.parse(match[2]);
-      if (Array.isArray(body) && body.length) {
-        promises.set(index, new PositionalDecoder(body).resolveIndex(0));
-      } else {
-        promises.set(index, body);
-      }
+      if (Array.isArray(body) && body.length) promises.set(index, new PositionalDecoder(body).resolveIndex(0));
+      else promises.set(index, body);
     } catch {
       // A malformed deferred promise should not destroy the readable main payload.
     }
@@ -171,12 +174,12 @@ export function findChatGptConversation(root) {
 
   const queue = [root];
   const seen = new WeakSet();
+  let cursor = 0;
   let visited = 0;
   let fallback = null;
-  while (queue.length && visited < MAX_SEARCH_NODES) {
-    const value = queue.shift();
-    if (!value || typeof value !== 'object') continue;
-    if (seen.has(value)) continue;
+  while (cursor < queue.length && visited < MAX_SEARCH_NODES) {
+    const value = queue[cursor++];
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
     seen.add(value);
     visited += 1;
 
@@ -186,17 +189,13 @@ export function findChatGptConversation(root) {
     }
 
     const children = Array.isArray(value) ? value : Object.values(value);
-    for (const child of children) {
-      if (child && typeof child === 'object') queue.push(child);
-    }
+    for (const child of children) if (child && typeof child === 'object') queue.push(child);
   }
   return fallback;
 }
 
 function orderedNodes(conversation) {
-  const mapping = conversation?.mapping && typeof conversation.mapping === 'object'
-    ? conversation.mapping
-    : {};
+  const mapping = conversation?.mapping && typeof conversation.mapping === 'object' ? conversation.mapping : {};
   const linear = conversation?.linear_conversation;
   if (Array.isArray(linear) && linear.length) {
     return linear.slice(0, MAX_ORDERED_NODES).map((entry) => {
@@ -219,21 +218,21 @@ function orderedNodes(conversation) {
     return reverse.reverse();
   }
 
+  // If current_node is absent, exporting every child branch creates duplicate and
+  // contradictory context. Follow one deterministic path (last child = newest-like)
+  // rather than flattening the whole conversation tree.
   const roots = Object.entries(mapping)
     .filter(([, node]) => node && typeof node === 'object' && !node.parent)
     .map(([id]) => id);
-  const start = roots.length ? roots : Object.keys(mapping).slice(0, 1);
+  let nodeId = roots[0] || Object.keys(mapping)[0] || '';
   const order = [];
   const seen = new Set();
-  const stack = [...start].reverse();
-  while (stack.length && order.length < MAX_ORDERED_NODES) {
-    const id = stack.pop();
-    if (!id || seen.has(id) || !mapping[id]) continue;
-    seen.add(id);
-    const node = mapping[id];
+  while (nodeId && mapping[nodeId] && !seen.has(nodeId) && order.length < MAX_ORDERED_NODES) {
+    seen.add(nodeId);
+    const node = mapping[nodeId];
     order.push(node);
-    const children = Array.isArray(node?.children) ? node.children : [];
-    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i]);
+    const children = Array.isArray(node?.children) ? node.children.filter((id) => typeof id === 'string' && mapping[id]) : [];
+    nodeId = children.length ? children[children.length - 1] : '';
   }
   return order;
 }
@@ -246,12 +245,22 @@ function safeAttachmentName(part) {
   return 'file';
 }
 
+function isLikelyEmbeddedBlob(text) {
+  if (/^data:[^,]+;base64,/i.test(text)) return true;
+  if (text.length < LARGE_BASE64_TEXT) return false;
+  const sample = text.slice(0, Math.min(text.length, 32_000));
+  return !/\s/.test(sample) && /^[A-Za-z0-9+/=_-]+$/.test(sample);
+}
+
+function cleanTextPart(text) {
+  if (typeof text !== 'string' || !text) return '';
+  return isLikelyEmbeddedBlob(text) ? '[Embedded binary data omitted / 内嵌二进制数据已省略]' : text;
+}
+
 function multimodalPartText(part) {
   if (!part || typeof part !== 'object') return '';
   const type = String(part.content_type || part.type || '').toLowerCase();
-  if (typeof part.text === 'string' && part.text.trim() && !/^data:[^,]+;base64,/i.test(part.text)) {
-    return part.text;
-  }
+  if (typeof part.text === 'string' && part.text.trim()) return cleanTextPart(part.text);
   if (/image|image_asset_pointer/.test(type)) return '[Image omitted / 图片已省略]';
   if (/audio/.test(type)) return '[Audio omitted / 音频已省略]';
   if (/file|attachment|asset_pointer/.test(type)) return `[Attachment / 附件: ${safeAttachmentName(part)}]`;
@@ -259,26 +268,18 @@ function multimodalPartText(part) {
 }
 
 export function chatGptContentToText(content) {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return cleanTextPart(content);
+  if (Array.isArray(content)) return content.map((part) => typeof part === 'string' ? cleanTextPart(part) : multimodalPartText(part)).filter(Boolean).join('\n\n');
   if (!content || typeof content !== 'object') return '';
   const type = String(content.content_type || '').toLowerCase();
   if (type === 'code' && typeof content.text === 'string') {
     const language = String(content.language || '').replace(/[`\r\n]/g, '').slice(0, 40);
-    return `\`\`\`${language}\n${content.text}\n\`\`\``;
+    return `\`\`\`${language}\n${cleanTextPart(content.text)}\n\`\`\``;
   }
   if (Array.isArray(content.parts)) {
-    const pieces = [];
-    for (const part of content.parts) {
-      if (typeof part === 'string') {
-        if (part.trim()) pieces.push(part);
-      } else {
-        const text = multimodalPartText(part);
-        if (text) pieces.push(text);
-      }
-    }
-    return pieces.join('\n\n');
+    return content.parts.map((part) => typeof part === 'string' ? cleanTextPart(part) : multimodalPartText(part)).filter(Boolean).join('\n\n');
   }
-  if (typeof content.text === 'string') return content.text;
+  if (typeof content.text === 'string') return cleanTextPart(content.text);
   return '';
 }
 
@@ -297,9 +298,7 @@ export function normalizeChatGptConversation(conversation) {
     messages.push({ role, text, time: message.create_time ?? message.createTime ?? null });
   }
   return {
-    title: typeof conversation.title === 'string' && conversation.title.trim()
-      ? conversation.title.trim()
-      : 'ChatGPT Conversation',
+    title: typeof conversation.title === 'string' && conversation.title.trim() ? conversation.title.trim() : 'ChatGPT Conversation',
     messages,
   };
 }
@@ -310,10 +309,5 @@ export function chatGptShareHtmlToMarkdown(html, sourceUrl = '') {
   const conversation = findChatGptConversation(root);
   if (!conversation) throw new Error('No ChatGPT conversation payload found / 未找到 ChatGPT 对话数据');
   const normalized = normalizeChatGptConversation(conversation);
-  return renderConversationMarkdown({
-    title: normalized.title,
-    provider: 'ChatGPT',
-    sourceUrl,
-    messages: normalized.messages,
-  });
+  return renderConversationMarkdown({ title: normalized.title, provider: 'ChatGPT', sourceUrl, messages: normalized.messages });
 }
