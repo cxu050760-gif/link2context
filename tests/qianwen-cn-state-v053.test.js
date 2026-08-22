@@ -31,7 +31,7 @@ test('qianwen-cn 02: manifest explicitly grants debugger and routes Chinese Qian
 
 test('qianwen-cn 03: debugger bridge is host-scoped, top-frame scoped, and detaches after each operation', () => {
   assert.match(background, /import '\.\/background\.js'/);
-  assert.match(background, /message\.type !== QIANWEN_DEBUGGER_MESSAGE/);
+  assert.match(background, /message\.type === QIANWEN_DEBUGGER_MESSAGE/);
   assert.match(background, /sender\?\.frameId > 0/);
   assert.match(background, /qianwen\.com/);
   assert.match(background, /qwenwork\.cn/);
@@ -64,15 +64,16 @@ test('qianwen-cn 06: pasted URL is intercepted once and failed CDP state is fail
   assert.match(listener, /stopEvent\(event\)/);
   assert.match(bridge, /stopImmediatePropagation/);
   assert.match(bridge, /QIANWEN_CDP_STATE_UNCONFIRMED/);
-  assert.match(background, /QIANWEN_DEBUGGER_BUSY/);
+  assert.match(background, /another debugger\|already attached/);
+  assert.match(background, /\$\{failurePrefix\}_BUSY/);
 });
 
-test('qianwen-cn 07: binary resources remain files and package stays V0.5.3', () => {
+test('qianwen-cn 07: V0.6 keeps the proven Qianwen CDP binary/text fallback while the package version advances', () => {
   assert.match(bridge, /new File\(\[base64ToBytes\(result\.base64\)\]/);
   assert.match(bridge, /new DataTransfer\(\)/);
   assert.match(bridge, /QIANWEN_ATTACHMENT_STATE_UNCONFIRMED/);
   assert.match(pkg.scripts.check, /background-v053\.js/);
   assert.match(pkg.scripts.check, /qianwen-cdp-v053\.js/);
-  assert.equal(pkg.version, '0.5.3');
-  assert.equal(manifest.version, '0.5.3');
+  assert.equal(pkg.version, '0.6.0');
+  assert.equal(manifest.version, '0.6.0');
 });
