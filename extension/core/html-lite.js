@@ -32,7 +32,6 @@ function stripNoise(html) {
     .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, ' ')
     .replace(ACTIVE_BLOCKS, ' ')
     .replace(UI_BLOCKS, ' ');
-  // A couple of bounded passes remove common wrapper containers without becoming a full HTML parser.
   for (let i = 0; i < 2; i += 1) source = source.replace(UI_ATTR_BLOCK, ' ');
   return source;
 }
@@ -67,7 +66,6 @@ function bestMainFragment(html) {
   candidates.sort((a, b) => b.textLength - a.textLength);
   const best = candidates[0];
   if (!best) return source;
-  // Prefer a semantic main/article when it contains a meaningful share of the readable page.
   return best.textLength >= Math.min(1200, Math.max(200, full.length * 0.18)) ? best.html : source;
 }
 
@@ -88,7 +86,9 @@ export function assessHtmlContent(html) {
   const ratio = bodyChars / Math.max(raw.length, 1);
   const explicitShell = /<div\b[^>]*(?:id|class)=["'][^"']*(?:root|app|__next)[^"']*["'][^>]*>\s*<\/div>/i.test(raw)
     || /enable javascript|javascript is required|please turn on javascript/i.test(readable);
-  const shellOnly = bodyChars < 80 || (bodyChars < 220 && raw.length > 4000 && ratio < 0.01) || (explicitShell && bodyChars < 400);
+  const shellOnly = (explicitShell && bodyChars < 400)
+    || (raw.length > 3000 && bodyChars < 80)
+    || (raw.length > 8000 && bodyChars < 220 && ratio < 0.01);
   return { shellOnly, readableChars: readable.length, bodyChars, ratio, title, readable };
 }
 
