@@ -345,14 +345,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const report = reportFor(sender, message.startedAt);
   const controller = new AbortController();
   const tabId = sender?.tab?.id;
-  if (Number.isInteger(tabId)) {
-    activeJobs.get(tabId)?.controller?.abort?.();
-    activeJobs.set(tabId, { controller, startedAt: report.startedAt, report });
-  }
 
   (async () => {
+    // Authorization and real-user-gesture gates must run before this message is
+    // allowed to mutate shared job state. Otherwise a rejected/stale message can
+    // abort a valid in-flight job merely by arriving later on the same tab.
     if (!(await senderAllowed(sender))) throw fail('SITE_NOT_ENABLED', 'PIPELINE', 'This site is not enabled for Link2Context / 当前网站未启用 Link2Context');
     if (message.userGesture !== true) throw fail('USER_GESTURE_REQUIRED', 'PIPELINE', 'A real user gesture is required / 必须由真实用户操作触发');
+
+    if (Number.isInteger(tabId)) {
+      activeJobs.get(tabId)?.controller?.abort?.();
+      activeJobs.set(tabId, { controller, startedAt: report.startedAt, report });
+    }
+
     return resolveV06(message.url, {
       targetHost: senderHost(sender),
       signal: controller.signal,
