@@ -148,7 +148,7 @@ test('attack 25: a global stop-generating button is insufficient unless the comp
 });
 
 test('attack 26: failed paste auto-send is surfaced instead of silently pretending manual mode was intended', () => {
-  assert.match(helper, /Paste auto-send was not confirmed/);
+  assert.match(helper, /could not verify a safe auto-send/);
   assert.match(helper, /code: 'SEND_UNCONFIRMED'/);
   assert.match(helper, /自动发送未确认/);
 });
@@ -171,4 +171,48 @@ test('attack 29: trusted manual send clicks do not overwrite the snapshot used f
 
 test('attack 30: slow but valid fetches have a bounded paste lifecycle instead of a tiny race window', () => {
   assert.match(helper, /PENDING_PASTE_TTL_MS = 120_000/);
+});
+
+test('attack 31: Link2Context progress UI and toast are explicitly excluded from attachment evidence', () => {
+  assert.match(helper, /#__link2context_progress_root/);
+  assert.match(helper, /#__link2context_toast/);
+  assert.match(helper, /ownedUiNode/);
+});
+
+test('attack 32: hidden mirrored proof nodes cannot recursively become fresh global attachment proof', () => {
+  assert.match(helper, /\[data-l2c-attachment-proof\]/);
+  const fn = helper.slice(helper.indexOf('function nodeShowsFile'), helper.indexOf('function composerScope'));
+  assert.match(fn, /ownedUiNode\(node\)/);
+});
+
+test('attack 33: page-level send evidence strips extension-owned UI before message matching', () => {
+  assert.match(helper, /function bodyTextWithoutOwnedUi/);
+  assert.match(helper, /clone\.querySelectorAll\(OWNED_UI_SELECTORS\)/);
+});
+
+test('attack 34: document-wide fallback refuses arbitrary type=submit controls without send semantics', () => {
+  const fn = helper.slice(helper.indexOf('function enabledSendButton'), helper.indexOf('function filenameHints'));
+  assert.match(fn, /if \(form\)/);
+  assert.match(fn, /strongSendSemantics\(el\) \|\|/);
+  assert.match(fn, /document\.querySelectorAll/);
+  assert.match(fn, /enabledControl\(el\) && strongSendSemantics\(el\)/);
+});
+
+test('attack 35: generic submit wording is not accepted as strong global send semantics', () => {
+  const fn = helper.slice(helper.indexOf('function strongSendSemantics'), helper.indexOf('function looksLikeSend'));
+  assert.doesNotMatch(fn, /submit\|/i);
+  assert.match(fn, /send\|ask/);
+});
+
+test('attack 36: legacy sent status is suppressed until V0.5.2 independently verifies it', () => {
+  assert.match(helper, /function verifyLegacySent/);
+  assert.match(helper, /stage \|\| ''\) === 'sent'/);
+  assert.match(helper, /success was suppressed fail-closed/);
+});
+
+test('attack 37: stale editor disconnection alone is not sufficient page-level send evidence', () => {
+  const fn = helper.slice(helper.indexOf('function submitEvidence'), helper.indexOf('function successToast'));
+  assert.match(fn, /const composerChanged = afterText !== beforeText/);
+  assert.match(fn, /const composerCleared = Boolean\(editor && !afterText\)/);
+  assert.doesNotMatch(fn, /!snapshot\.editor\?\.isConnected/);
 });
