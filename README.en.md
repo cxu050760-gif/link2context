@@ -8,7 +8,7 @@ English | [中文](./README.md)
 
 ## V0.5.3 closeout focus
 
-- **Qwen visible UI is no longer accepted as real state.** Live testing showed that extracted text or an attachment-looking card could be visible while Qwen would later send only text typed manually by the user. V0.5.3 treats that as a failed handoff, not success.
+- **Qwen visible UI is no longer accepted as real state.** Live testing produced an exact failure where extension-created content could not be deleted; after the user typed extra characters and sent, Qwen transmitted only those newly typed characters. That proves visible content can exist outside Qwen's actual send state.
 - **Ordinary Qwen text uses the browser editing path.** The Qwen adapter uses the browser's editing command rather than assigning `innerHTML`, `textContent`, or manufacturing a synthetic `InputEvent` after the write. The text must survive blur/refocus reconciliation and Qwen's own send control must become enabled. Otherwise the handoff fails with `QWEN_EDITOR_STATE_UNCONFIRMED`.
 - **Original PDF/image/binary resources remain original attachments.** A filename merely appearing in the DOM is insufficient evidence; Qwen must also expose an enabled send control or the adapter fails with `QWEN_ATTACHMENT_STATE_UNCONFIRMED`.
 - **One owner per Qwen gesture.** `qwen-state-bridge-v053.js` loads before the generic `content-script-v053.js` and stops propagation for Qwen gestures it owns, preventing two send state machines from processing the same action.
