@@ -2,170 +2,113 @@
 
 ## 中文
 
-Link2Context V0.5.3 需要 `http://*/*` 与 `https://*/*` 主机权限，才能替网页 AI 在用户浏览器里读取链接。V0.5.3 还为中国千问增加了 `debugger`（Chrome 调试器）权限，用于解决受控富文本编辑器“DOM 看得到、真实发送状态却没有内容”的问题。
-
-安全目标不是“任何网页都能调用的万能代理/万能浏览器控制器”，而是：**只有用户在允许的 AI 聊天输入框里真实提交 URL 时，才允许受限抓取；普通抓取默认不带登录态；需要浏览器上下文时必须显式授权；千问调试输入只允许在指定千问域名、顶层页面和极少数固定输入动作中使用。**
-
-### V0.5.3：为什么需要 `debugger`
-
-真实 `www.qianwen.com` 测试曾出现：扩展生成的内容能显示在输入区，但无法正常删除；用户后来手动输入几个字后，真正发送出去的只有后来输入的文字。这证明直接修改 DOM 或调用旧式编辑命令并不能可靠进入千问内部的受控编辑状态。
-
-V0.5.3 因此改用 Chrome DevTools Protocol（CDP，Chrome 调试协议）的真实输入路径：
-
-- 文本：`Input.insertText`；
-- 自动发送：`Input.dispatchKeyEvent`，仅发送 Enter 的 `rawKeyDown` / `keyUp`；
-- 不使用 `Runtime.evaluate` 执行任意页面脚本；
-- 不通过 debugger Network 域读取额外网络流量；
-- 不通过 debugger 读取 Cookie、Local Storage 或浏览器凭据；
-- 不把 `debugger` 暴露为通用网页自动化接口。
-
-### `debugger` 权限收口
-
-`debugger` 是强权限，因此 V0.5.3 在后台增加了明确的硬边界：
-
-- 只处理扩展内部消息类型 `L2C_QIANWEN_CDP`；
-- 只允许顶层 frame，子 frame 会返回 `QIANWEN_DEBUGGER_FRAME_DENIED`；
-- 调用方页面必须属于 `qianwen.com` / `www.qianwen.com` / 其子域，或 `qwenwork.cn` / 其子域；其他 host 返回 `QIANWEN_DEBUGGER_HOST_DENIED`；
-- 必须存在真实 sender tab；
-- 只允许 `insertText` 与 `pressEnter` 两种动作，其他动作返回 `QIANWEN_DEBUGGER_ACTION_INVALID`；
-- 单次文本上限 180,000 字符；
-- 每次操作临时 `attach`，完成或失败后都在 `finally` 中 `detach`；
-- 如果标签页已被 DevTools 或其他调试器占用，返回 `QIANWEN_DEBUGGER_BUSY` / attach failure，不抢占、不绕过。
-
-Chrome 在此期间可能显示“扩展正在调试浏览器/标签页”的提示，这是 `chrome.debugger` 的浏览器级可见安全提示，不应隐藏。
-
-### 页面交付成功边界
-
-V0.5.3 不把“页面上看得到”作为充分成功证据：
-
-- 中国千问文本通过 CDP `Input.insertText` 后，必须再次读取正文签名，并经过 blur/refocus（失焦/回焦）后仍保持；否则返回 `QIANWEN_CDP_STATE_UNCONFIRMED`；
-- 千问自动发送通过真实 Enter 后，还必须观察到生成状态或消息离开 composer（输入区）等独立证据，否则返回 `SEND_UNCONFIRMED`；
-- PDF / 图片等原始二进制仍保持文件附件，不把二进制强行解码成文本；
-- 通用网页 AI 的自动发送同样遵循 fail-closed（失败时拒绝假成功）；
-- Link2Context 永不强行移除网页控件的 `disabled` / `aria-disabled`；
-- STOP 会中止网络读取、分页、附件等待、编辑器交付和自动发送等待。
+Link2Context V0.6 需要 `http://*/*` / `https://*/*` 主机权限来读取用户主动提交的链接，并保留 V0.5.3 为千问引入的 `debugger`（Chrome 调试器）权限。V0.6 的安全目标不是“万能代理/万能浏览器控制器”，而是：**只有真实用户在允许的网页 AI 输入区提交 URL 时，才启动受限采集与交付；外部内容始终是不可信数据；拿不到/传不过去时明确失败，不为了“完整”绕过网站和浏览器的安全边界。**
 
 ### URL / 网络边界
 
-- 仅允许 HTTP / HTTPS；
-- URL 内嵌用户名或密码会被拒绝；
-- localhost、私网、链路本地、特殊用途 IP 与云 metadata（元数据）目标被阻止；
-- 每次重定向都重新校验；
-- 响应大小、超时、重试与取消均受限制；
-- 自动抓取必须来自真实用户事件，background（后台）还会再次验证调用方网页 AI host；
-- 页面正文会作为**不可信数据**交付给 AI，而不是作为系统指令执行。
+- 仅 HTTP / HTTPS；拒绝 URL 内嵌用户名/密码；
+- 阻止 localhost、私网、链路本地、特殊用途 IP 与云 metadata（元数据）地址；
+- 网络重定向逐跳重新验证；
+- 响应大小、超时、重试、分页和取消均有上限；
+- 自动采集必须由真实用户事件触发，background（后台）再次验证调用方 AI host；
+- 敏感 query 参数在展示来源 URL 时脱敏。
 
-### 浏览器上下文授权
+### Authorized Browser Context / 授权浏览器上下文
 
-V0.5.2 引入、V0.5.3 保留的 Authorized Browser Context（授权浏览器上下文）默认关闭：
+默认关闭。401 / 403 或静态 HTML 只有页面壳时，只有用户显式授权后才允许使用浏览器登录上下文进行有限渲染采集。
 
-- 普通抓取不带登录态；
-- 401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` 只有用户显式授权后才可进入浏览器上下文回退；
-- 授权可以全局撤销，并支持 host deny list（按站点禁用列表）；
-- Link2Context 不使用 `chrome.cookies` 直接读取或保存 Cookie 值；
-- 授权标签页中的站点上下文只用于用户明确授权的目标，目标 URL 与最终 URL 仍重新校验；
-- 授权不是绕过登录、验证码、DRM、付费墙或站点访问控制的机制；这些限制导致失败时必须明确失败。
+- 授权可撤销，并支持 host deny-list（站点禁用列表）；
+- V0.6 在授权标签页发生导航/重定向后再次检查当前 URL 的公开地址安全和授权/deny-list，不能通过跳转进入被明确禁用的站点；
+- 自动“加载更多”只在正文范围内、有限次数进行；候选若是跨源 anchor（链接）不会自动点击；
+- 不使用 `chrome.cookies` 直接读取或保存 Cookie 值；
+- 不绕过登录墙、验证码、付费墙、DRM 或站点访问控制。
 
-### 数据最小化
+### External content / 外部内容信任边界
 
-- 外部 URL 展示时会脱敏常见 credential/token（凭据/令牌）查询参数；
-- ChatGPT Share / WorkBuddy Share 清理系统、工具、大块 base64、推理等非必要内容；
-- 外部反序列化对象使用安全结构，避免 `__proto__` 原型污染；
-- 文件名会做安全化与长度限制；
-- 二进制类型先看字节签名/MIME/扩展名，避免误解码成文本。
+V0.6 canonical Context Model（规范上下文模型）把网页、文件和远程资源标记为 `untrusted-external`。网页正文中的“忽略之前指令”“执行某命令”等文字仍然只是 source data（来源数据），不能自动升级成系统/用户指令。
 
-### V0.5.3 验证状态
+结构化解析使用 DOMParser / Mozilla Readability；正文语义、图片、表格、代码和链接被提取成受控数据结构，而不是执行来源页面脚本。
 
-- PR #10 已合并到 `main`；
-- `npm run check`：通过；
-- 全量 `npm test`：292 / 292 通过；
-- GitHub Actions CI：成功；
-- `www.qianwen.com` 的核心文本交付真实浏览器回归已通过，提取文本可正常编辑、删除。
+### 附件边界
 
-第三方网页 AI 会持续变化。以上验证说明 V0.5.3 当前实现通过了已知回归门槛，但不代表第三方站点未来永久兼容；网页结构变化后仍应重新做真实浏览器 smoke test（冒烟测试）。
+- PDF、图片、Office、压缩包、音视频和未知二进制优先保留原文件；
+- 资源类型先看字节/MIME/扩展名，避免把二进制乱码冒充文本；
+- V0.6 严格尊重网页 `<input type="file" accept=...>`；找不到兼容上传入口时明确失败或标记 partial（部分完成），不再临时移除 `accept` 强塞文件；
+- 关键图片下载有单图/总大小/数量预算，并重新验证实际 MIME；
+- 图片或附件没有被网页 AI 确认时，不得当作成功，也会禁止不安全的自动发送。
+
+### `debugger` 权限
+
+千问保留 V0.5.3 已实测的 CDP（Chrome DevTools Protocol，Chrome 调试协议）真实输入路径：
+
+- 文本：`Input.insertText`；
+- Enter：`Input.dispatchKeyEvent`；
+- 只允许顶层 `qianwen.com` / `qwenwork.cn` 页面；
+- 只开放固定 `insertText` / `pressEnter` 动作；
+- 每次操作临时 attach，结束后立即 detach；
+- 被 DevTools / 其他调试器占用时明确失败，不抢占。
+
+V0.6 对 ChatGPT / DeepSeek / 豆包只提供更窄的 generic debugger fallback（通用调试回退）：
+
+- 仅允许顶层指定 host；
+- 必须显式开启 Auto-send（自动发送）；
+- 只允许发送 Enter，不允许通用文本注入；
+- 不开放 `Runtime.evaluate` 任意脚本执行；
+- 不使用 debugger Network/Cookie/Local Storage 能力抓取凭据。
+
+### 页面交付和自动发送
+
+- 编辑状态需要内容签名/状态确认，不能只看 DOM “显示出来了”；
+- 自动发送采用 fail-closed（失败时不假装成功）：按钮、表单或 Enter 动作本身都不等于成功，必须有独立发送后证据；
+- 证据不足返回 `SEND_UNCONFIRMED`；
+- 永不强制解除 `disabled / aria-disabled`；
+- STOP 覆盖抓取、重试、分页、渲染等待、媒体下载、附件等待、编辑器交付和发送等待。
+
+### V0.6 验证状态
+
+- V0.6 功能开发已冻结；
+- 最终候选要求 `npm run check`、全量 `npm test` 和 GitHub Actions CI 全绿；
+- 最终安全收口新增了“附件 accept 不可绕过”和“授权渲染导航重新校验”回归测试；
+- 第三方网页实时能力单独记录在 `docs/V0.6-LIVE-EVIDENCE.md`。没有 V0.6 真实浏览器证据就保持 `UNVERIFIED`；V0.5.3 千问 PASS 只作为历史回归基线。
 
 ---
 
 ## English
 
-Link2Context V0.5.3 requests `http://*/*` and `https://*/*` host permissions so it can acquire URLs on behalf of a web-AI chat. V0.5.3 also adds Chrome's `debugger` permission for Chinese Qianwen, specifically to solve the controlled-editor failure where text was visible in the DOM but absent from the site's real send state.
+Link2Context V0.6 requests broad HTTP(S) host access to acquire URLs explicitly submitted by the user and retains the V0.5.3 `debugger` permission required by the proven Qianwen real-input path. The security goal is not a universal proxy or browser-control surface. **Acquisition starts from a real user URL gesture in an allowed web-AI composer; external content remains untrusted data; and incomplete delivery fails explicitly rather than bypassing browser or site security controls.**
 
-The security goal is not a universal proxy or generic browser-control surface. **Restricted acquisition starts only from a real user URL gesture in an allowed AI composer; ordinary fetching is unauthenticated by default; browser-context reuse requires explicit authorization; and Qianwen debugger input is limited to designated Qianwen hosts, the top frame, and a tiny fixed action set.**
+### Network boundaries
 
-### Why V0.5.3 needs `debugger`
-
-A live `www.qianwen.com` regression showed extension-created content visibly present but not normally deletable. After the user typed extra characters, only those new characters were actually sent. Direct DOM editing therefore did not reliably enter Qianwen's controlled editor state.
-
-V0.5.3 uses the Chrome DevTools Protocol (CDP) real-input path instead:
-
-- text: `Input.insertText`;
-- auto-send: `Input.dispatchKeyEvent`, limited to Enter `rawKeyDown` / `keyUp`;
-- no arbitrary `Runtime.evaluate` execution;
-- no debugger Network-domain capture;
-- no debugger-based Cookie, Local Storage, or credential extraction;
-- no generic debugger automation API is exposed.
-
-### `debugger` permission confinement
-
-Because `debugger` is a powerful permission, V0.5.3 enforces hard background gates:
-
-- only the internal `L2C_QIANWEN_CDP` message type is handled;
-- only the top frame is accepted; subframes fail with `QIANWEN_DEBUGGER_FRAME_DENIED`;
-- the sender must be `qianwen.com` / its subdomains or `qwenwork.cn` / its subdomains; other hosts fail with `QIANWEN_DEBUGGER_HOST_DENIED`;
-- a real sender tab is required;
-- only `insertText` and `pressEnter` actions are accepted; all others fail with `QIANWEN_DEBUGGER_ACTION_INVALID`;
-- text input is capped at 180,000 characters per operation;
-- every operation attaches temporarily and detaches in `finally`, including failure paths;
-- if DevTools or another debugger already owns the tab, the operation fails explicitly with `QIANWEN_DEBUGGER_BUSY` / attach failure instead of taking over.
-
-Chrome may display a visible “extension is debugging this browser/tab” banner during these operations. That is an expected browser-level security indicator and is not suppressed.
-
-### Page-handoff success boundary
-
-V0.5.3 does not treat visible UI as sufficient proof of successful handoff:
-
-- after Chinese-Qianwen text is inserted through CDP `Input.insertText`, text signatures must still be present after blur/refocus reconciliation or the result is `QIANWEN_CDP_STATE_UNCONFIRMED`;
-- after a real Enter auto-send, independent evidence such as generation state or the message leaving the composer is required or the result is `SEND_UNCONFIRMED`;
-- original PDF/image/binary resources remain file attachments rather than being force-decoded as text;
-- generic web-AI auto-send also remains fail-closed;
-- Link2Context never force-removes `disabled` / `aria-disabled` from site controls;
-- STOP cancels network acquisition, pagination, attachment waiting, editor handoff, and auto-send waiting.
-
-### URL / network boundary
-
-- HTTP / HTTPS only.
-- Embedded URL credentials are rejected.
+- HTTP / HTTPS only; embedded URL credentials are rejected.
 - localhost, private/link-local/special-purpose address space, and cloud metadata targets are blocked.
-- Every redirect destination is revalidated.
-- Response size, timeout, retry, and cancellation are bounded.
+- Redirect destinations are revalidated.
+- Response size, timeout, retries, pagination, and cancellation are bounded.
 - Automatic acquisition requires a real user event and the background validates the calling web-AI host again.
-- Extracted page content is explicitly treated as untrusted data, not system instructions.
 
 ### Authorized Browser Context
 
-The Authorized Browser Context introduced in V0.5.2 and retained in V0.5.3 is off by default:
+Authorized browser reuse is off by default and requires explicit user opt-in. It is revocable and supports a host deny-list.
 
-- ordinary acquisition does not reuse login state;
-- 401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` may use browser context only after explicit user authorization;
-- authorization is globally revocable and hosts can be deny-listed;
-- Link2Context does not directly read or store Cookie values through `chrome.cookies`;
-- target and final URLs remain revalidated when authorized browser context is used;
-- authorization is not a mechanism for bypassing login walls, CAPTCHAs, DRM, paywalls, or site access control; those failures remain explicit.
+V0.6 rechecks authorization and the deny-list after rendered navigation or redirects. Limited load-more automation does not auto-click cross-origin anchor candidates. Link2Context does not directly read Cookie values with `chrome.cookies` and does not bypass login walls, CAPTCHAs, paywalls, DRM, or site access controls.
 
-### Data minimization
+### Untrusted external data
 
-- common credential/token query parameters are redacted in displayed source URLs;
-- ChatGPT Share / WorkBuddy Share cleanup excludes unnecessary system/tool/base64/reasoning payloads;
-- external serialized objects are decoded safely against `__proto__` prototype pollution;
-- attachment names are sanitized and bounded;
-- binary classification uses byte signatures/MIME/extensions before text decoding.
+Remote page/file content is represented as `untrusted-external` canonical data. Prompt-like source text never becomes a system/user instruction merely because it appeared in a fetched page. Structured parsing uses DOMParser / Mozilla Readability and extracts controlled data rather than executing source scripts.
 
-### V0.5.3 validation status
+### Attachment boundaries
 
-- PR #10 is merged into `main`;
-- `npm run check`: passed;
-- full `npm test`: 292 / 292 passed;
-- GitHub Actions CI: successful;
-- the core `www.qianwen.com` live-browser text-handoff regression passed, with extracted text entering a normally editable/deletable state.
+Original binary resources remain files whenever appropriate. V0.6 respects the site's `<input type="file" accept=...>` contract; an incompatible uploader fails closed instead of having `accept` removed. Image acquisition is bounded by count and bytes and validates actual image MIME before handoff.
 
-Third-party web-AI UIs continue to evolve. These results establish the current V0.5.3 regression baseline but do not guarantee permanent compatibility with future site changes; live-browser smoke testing remains appropriate after target-site changes.
+### `debugger` confinement
+
+Qianwen retains the V0.5.3 CDP `Input.insertText` and Enter path, restricted to top-frame Qianwen hosts and a tiny fixed action set with temporary attach/detach.
+
+For ChatGPT / DeepSeek / Doubao, V0.6 exposes only a narrower Enter fallback: supported top-frame hosts only, explicit Auto-send required, Enter only, no generic text injection, no `Runtime.evaluate`, and no debugger Network/Cookie/Local Storage credential capture.
+
+### Handoff / send proof
+
+Visible DOM is not sufficient proof of editor state. Auto-send is fail-closed: clicking, form submission, or Enter is not success without independent post-send evidence. Insufficient evidence becomes `SEND_UNCONFIRMED`. Disabled controls are never force-enabled, and STOP is cancellation-aware across acquisition, render, media, handoff, and send waits.
+
+### V0.6 validation
+
+V0.6 feature development is frozen. The final candidate requires syntax checks, the complete automated test suite, and GitHub Actions CI to pass. Live third-party capabilities remain separately tracked in `docs/V0.6-LIVE-EVIDENCE.md`; untested V0.6 behavior stays `UNVERIFIED`, while V0.5.3 Qianwen PASS remains only a historical regression baseline.
