@@ -36,13 +36,16 @@ test('v0.6 debugger revalidates the current tab host after attach and before eac
   assert.equal((enter.match(/requireCurrentDebuggerHost/g) || []).length, 2);
 });
 
-test('v0.6 generic auto-send is fail-closed with button, form, then bounded CDP Enter', () => {
+test('v0.6 generic auto-send is fail-closed and does not chain side effects after an unconfirmed attempt', () => {
   const start = generic.indexOf('async function autoSubmit');
   const end = generic.indexOf('async function preparePrimary', start);
   const section = generic.slice(start, end);
   assert.ok(section.indexOf("strategy: 'target-button'") < section.indexOf("strategy: 'form-submit'"));
   assert.ok(section.indexOf("strategy: 'form-submit'") < section.indexOf('L2C_TARGET_CDP_V06'));
   assert.match(section, /verifySent/);
+  assert.match(section, /target-button-unconfirmed/);
+  assert.match(section, /form-submit-unconfirmed/);
+  assert.match(section, /cdp-enter-unconfirmed/);
   assert.match(section, /return \{ ok: false, strategy: 'none' \}/);
 });
 
@@ -77,7 +80,12 @@ test('v0.6 content/background progress and STOP share the exact same job identit
     assert.match(source, /resolveUrl\(url, startedAt\)/);
     assert.match(source, /L2C_RESOLVE_URL_V06[\s\S]*startedAt/);
     assert.match(source, /startedAt: Number\(extra\.startedAt\) \|\| activeJob\?\.startedAt/);
-    assert.match(source, /L2C_CANCEL_JOB_V06[\s\S]*startedAt: activeJob\.startedAt/);
+    const cancelStart = source.indexOf("document.addEventListener('link2context:cancel'");
+    const cancelEnd = source.indexOf("document.addEventListener('paste'", cancelStart);
+    const cancel = source.slice(cancelStart, cancelEnd);
+    assert.match(cancel, /const startedAt = activeJob\.startedAt/);
+    assert.match(cancel, /L2C_CANCEL_JOB_V06['"][\s\S]*\{ startedAt \}/);
+    assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*\{ startedAt \}/);
   }
   assert.match(pipeline, /reportFor\(sender, requestedStartedAt = 0\)/);
   assert.match(pipeline, /Number\(message\.startedAt\) !== job\.startedAt/);
