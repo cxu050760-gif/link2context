@@ -1,0 +1,15 @@
+{
+  "name": "link2context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Turn links into clean, AI-ready context for any web AI.",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check extension/popup.js && node --check extension/core/url-safety.js && node --check extension/core/workbuddy.js && node --check extension/core/normalize.js && node --check extension/core/fetch-policy.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Link2Context",
+  "version": "0.1.0",
+  "description": "Turn links into clean, AI-ready context. / 把链接转换成 AI 可直接读取的上下文。",
+  "permissions": ["downloads", "clipboardWrite"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "Link2Context",
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Link2Context</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Link2Context</h1>
+    <p class="sub">链接 → AI 上下文 / Link → AI-ready context</p>
+    <label for="url">链接 / URL</label>
+    <textarea id="url" rows="3" placeholder="https://..."></textarea>
+    <div class="row">
+      <button id="convert">转换 / Convert</button>
+      <button id="downloadOriginal" class="secondary">下载原文件 / Download original</button>
+    </div>
+    <p id="status" role="status"></p>
+    <textarea id="output" rows="12" readonly placeholder="转换后的 Markdown 会显示在这里。"></textarea>
+    <div class="row">
+      <button id="copy" class="secondary" disabled>复制 / Copy</button>
+      <button id="save" class="secondary" disabled>保存 .md / Save</button>
+    </div>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
