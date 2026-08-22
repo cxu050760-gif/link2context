@@ -2,35 +2,64 @@
 
 English | [中文](./README.md)
 
-**Send only a link in a web AI chat. Link2Context fetches the real content locally, converts it, injects it back into the current composer, and continues the send.**
+**Send only a URL in a web-AI chat. Link2Context fetches the real content in your browser, cleans it into AI-ready context, and hands it back to the current AI.**
 
-V0.2 is not just a downloader. It is a local link bridge for web AIs such as ChatGPT, Doubao, Kimi, Claude, Gemini, DeepSeek, and Qwen when their own URL-fetch tools cannot read a target.
+V0.3 focuses on more than fetching. It tries to keep only the useful context after retrieval. ChatGPT public shares and WorkBuddy shares now have dedicated conversation extractors instead of feeding a web AI roughly 1 MB of hydration/JSON internals.
 
 ## Normal workflow
 
-1. Paste one `http://` or `https://` URL into a supported web AI composer.
+1. Paste one `http://` or `https://` URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
 2. Press Enter or click Send.
-3. Link2Context intercepts a URL-only message.
-4. The browser extension fetches the target locally.
-5. It normalizes the content into AI-ready context.
-6. It replaces the URL-only draft and continues the send.
+3. Link2Context intercepts the URL-only message → fetches locally → detects the source → cleans it → injects/uploads it → continues the send.
 
-No manual download, Markdown conversion, copy, or upload is needed in the normal path.
+Short context is injected as text. Long clean context automatically becomes a `.md` (Markdown) attachment when possible.
+
+## V0.3: clean conversation extraction
+
+### ChatGPT public shares
+
+For `https://chatgpt.com/share/...`, Link2Context now:
+
+- recognizes the current public share-page `streamController.enqueue(...)` hydration payload;
+- decodes the turbo-stream positional-flatten wire format;
+- prefers `linear_conversation`, otherwise follows `current_node → parent` so alternate branches are not mixed into the active thread;
+- keeps **User** and **Assistant** message text;
+- omits system/tool/page-state/metadata noise by default;
+- turns images, audio, and attachments into lightweight placeholders instead of exposing large base64 blobs or internal asset pointers;
+- when direct fetch returns an unparseable shell/challenge page, automatic mode can open an inactive browser tab for the same public share URL, read its HTML, close the tab, and retry the clean extractor.
+
+Instead of raw `streamController.enqueue(...)` serialization, the target is clean output such as:
+
+```markdown
+# Conversation title
+
+Provider / 来源平台: ChatGPT
+Source / 来源链接: https://chatgpt.com/share/...
+
+## User / 用户
+...
+
+## Assistant / AI
+...
+```
+
+### WorkBuddy shares
+
+`workbuddy.link/p/...` still resolves to the public `conversation-data.json`, but now uses the same normalized conversation Markdown schema as ChatGPT. User/assistant text is kept while large images, reasoning bodies, and tool payloads are omitted or represented by small placeholders.
+
+## Other link types
+
+- **Regular pages**: removes active/noisy page blocks and extracts readable text as Markdown.
+- **JSON / APIs**: parses the full JSON before rendering AI-readable structure and sniffs mislabeled responses.
+- **Plain text / XML / JavaScript**: wraps content with source metadata.
+- **PDF / images / ZIP / other binary files**: safely fetches and attempts to attach the file to the current web-AI message.
+- **Very long text**: converts to a `.md` attachment instead of overflowing a composer.
 
 ## Built-in web AI support
 
 ChatGPT, Claude, Gemini / Google AI Studio, Grok, Perplexity, DeepSeek, Doubao, Kimi, Qwen / Tongyi, Poe, Microsoft Copilot, Mistral Chat, and OpenRouter are built in.
 
 For another web AI, open that site, click Link2Context once, and choose **Enable current site**. URL-only chat messages can then use the same automatic path.
-
-## Link types
-
-- **WorkBuddy shares**: resolves `workbuddy.link/p/...` to the underlying `conversation-data.json`, extracts conversation text, and omits image base64, tool arguments, and reasoning payloads.
-- **Regular pages**: extracts readable HTML text and wraps it as Markdown context.
-- **JSON / APIs**: parses the full JSON before rendering AI-readable Markdown and also sniffs mislabeled responses.
-- **Plain text / XML / JavaScript**: wraps content with source metadata.
-- **PDF / images / archives / other binary files**: fetches the file and attempts to attach it to the current web-AI message.
-- **Very long text**: automatically becomes a `.md` attachment instead of overflowing a chat composer.
 
 ## Install (Chrome / Edge)
 
@@ -39,31 +68,26 @@ For another web AI, open that site, click Link2Context once, and choose **Enable
 3. Enable Developer mode.
 4. Click **Load unpacked**.
 5. Select the repository's **`extension` directory**.
-6. Open a supported web AI and send a URL-only message.
+6. After updating the repository, run `git pull`, reload Link2Context on the extensions page, and preferably refresh already-open AI tabs.
 
 ## Security boundaries
 
-Because Link2Context can retrieve broad HTTP(S) targets, V0.2 keeps automatic fetches on a user-initiated path:
+Link2Context has powerful cross-origin fetch permissions, so automatic mode keeps strict boundaries:
 
 - HTTP(S) only;
 - credential-bearing URLs rejected;
-- localhost, private/link-local, special-purpose ranges, and cloud metadata blocked;
+- localhost, private/link-local, special-purpose IP ranges, and cloud metadata blocked;
 - every redirect target revalidated;
 - `targetAddressSpace: public` requested where Chromium supports it;
-- 12 MiB response cap and 25-second default timeout;
-- ordinary web pages cannot directly call the extension;
-- automatic interception requires real trusted browser events;
-- the background re-checks the calling web-AI host;
-- likely secret query parameters are redacted in generated context;
-- fetched text is explicitly marked as untrusted external data.
+- 12 MiB response cap plus network timeouts;
+- automatic fetch requires a real user event and the background verifies the calling web-AI host again;
+- ChatGPT / WorkBuddy browser fallbacks are pinned to the expected official host/path and are not exposed as generic browser proxies;
+- fetched text is explicitly marked as untrusted external data, not instructions;
+- likely secret query parameters are redacted from generated context;
+- ChatGPT serialized objects are decoded into null-prototype objects to prevent `__proto__` prototype pollution;
+- decoder depth, slot count, search nodes, and output message counts are bounded.
 
 See [SECURITY.md](./SECURITY.md).
-
-## Compatibility note
-
-“Any URL” does not mean bypassing authentication, CAPTCHAs, DRM, paywalls, or browser/enterprise network policy. V0.2 targets HTTP(S) resources the user's browser is normally allowed to retrieve, so the web AI no longer needs its own generic URL-fetch capability.
-
-Heavily client-rendered SPAs may expose little useful text to a direct GET. Automatic binary upload also depends on the target AI exposing a compatible file input. The popup keeps the manual converter as a fallback.
 
 ## Tests and adversarial review
 
@@ -72,16 +96,23 @@ npm test
 npm run check
 ```
 
-On top of the six V0.1 review rounds, V0.2 received **15 adversarial rounds** focused on the zero-touch web-AI path: SSRF variants, redirects, false send success, upload races, rich-text editors, malicious-page abuse, oversized context, and more.
+V0.3 adds **15 adversarial review rounds** focused on public AI conversations → clean context: branch contamination, malformed promises, cyclic mappings, prototype pollution, base64 bloat, prompt injection, invalid timestamps, shell-page fallback, host/path escape, manual/automatic divergence, and more.
 
 See:
 
-- [V0.2 Adversarial Review](./docs/ATTACK-REVIEW-V0.2.md)
+- [V0.3 Adversarial Review](./docs/ATTACK-REVIEW-V0.3.md)
+- [V0.3 Design](./docs/DESIGN-V0.3.md)
 - [References](./docs/REFERENCES.md)
 
 ## Prior art
 
-Before implementation, V0.2 checked existing GitHub projects and reused architectural ideas from MCP SuperAssistant (web-AI result injection), MarkDownload (browser-side web-to-Markdown), and Defuddle (main-content extraction). **No code from those projects is copied into Link2Context.** This repository remains MIT-licensed.
+V0.3 was preceded by a GitHub collision/prior-art check. The current ChatGPT-share wire-format understanding was informed by `chickensintrees/chatgpt-share-reader`, while `pionxzh/chatgpt-exporter` informed conversation-export ideas. Earlier versions also studied MCP SuperAssistant, MarkDownload, and Defuddle.
+
+**Link2Context is an independent JavaScript implementation and does not directly copy source code from those projects.** The repository remains MIT-licensed.
+
+## Compatibility boundary
+
+“Handle any link” means best-effort handling of HTTP(S) content the user's browser can normally access. It does not bypass authentication, CAPTCHAs, DRM, paywalls, or enterprise network policy. Dedicated extractors may need updates when upstream sites change; failures should be explicit instead of silently treating a megabyte of useless page internals as success.
 
 ## License
 
