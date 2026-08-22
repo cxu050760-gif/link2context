@@ -2,100 +2,137 @@
 
 English | [中文](./README.md)
 
-**Send only a URL in a web-AI chat. Link2Context fetches the real content in your browser, cleans it into AI-ready context, and hands it back to the current AI.**
+**Send one URL in a web-AI chat. Link2Context fetches the resource in your browser, classifies it, cleans it into AI-ready context, and hands it to the current AI.**
 
-V0.3 focuses on more than fetching. It tries to keep only the useful context after retrieval. ChatGPT public shares and WorkBuddy shares now have dedicated conversation extractors instead of feeding a web AI roughly 1 MB of hydration/JSON internals.
+V0.4.0 explicitly separates the generic pipeline into:
 
-**V0.3.1 adds target-aware handoff.** The same clean context is no longer forced through the same delivery mechanism on every web AI. On ChatGPT, WorkBuddy and ChatGPT conversation shares are file-first and use clean Markdown attachments to avoid rich-composer stalls. DeepSeek and other targets keep their already-working inline-text path for short and medium content.
+```text
+Acquire → Classify → Render if needed → Extract → Handoff
+```
+
+It is now **byte-first**: raw bytes, file signatures, MIME, and URL extensions are considered before text decoding. PDF, images, archives, Office files, audio/video, and unknown binary resources default to original-file attachments instead of being decoded into garbage text.
+
+V0.3 previously added clean ChatGPT/WorkBuddy conversation extraction, while V0.3.1 added target-aware delivery: ChatGPT is file-first for conversation sources and DeepSeek/other targets keep their stable short/medium inline path.
 
 ## Normal workflow
 
-1. Paste one `http://` or `https://` URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
+1. Paste one HTTP(S) URL into ChatGPT, DeepSeek, Doubao, Kimi, Claude, Gemini, Qwen, or another enabled web AI.
 2. Press Enter or click Send.
-3. Link2Context intercepts the URL-only message → fetches locally → detects the source → cleans it → **chooses text or attachment based on the destination AI** → injects/uploads it → continues the send.
+3. Link2Context intercepts → fetches locally → classifies → cleans/parses → chooses text or attachment from both resource type and target AI → uploads/injects → continues send.
 
-Delivery is now target-aware instead of controlled by one global size threshold:
+## V0.4: universal URL pipeline hardening
 
-- **ChatGPT + WorkBuddy / ChatGPT conversation shares**: prefer a clean `.md` (Markdown) attachment.
-- **ChatGPT + generic content**: short content stays inline; at 24,000 characters it becomes an attachment.
-- **DeepSeek / other targets**: retain the existing 250,000-character global hard threshold, preserving already-working short/medium inline behavior.
-- **Binary files**: continue through the attachment path.
+### Binary is no longer text by default
 
-The progress panel shows the destination host, source kind, payload size, selected handoff mode, and reason.
+Classification combines:
+
+- **Magic signatures** such as `%PDF-`, PNG/JPEG, ZIP, MP3/MP4;
+- **Content-Type / MIME**;
+- **URL file extension**;
+- byte-level text plausibility plus JSON/HTML sniffing.
+
+A strong binary signature wins over a misleading `text/plain`. Conversely, if a server claims `text/html` or `application/json` but the bytes are clearly binary, Link2Context fails closed to binary handling.
+
+Original-file attachment handling currently covers PDF, common images, ZIP/7z/RAR/gzip, DOCX/XLSX/PPTX and related documents, common audio/video, and unknown binary.
+
+### Errors retain their real stage
+
+Failures no longer collapse into `Page handoff failed`:
+
+- `AUTH_REQUIRED_401` — authentication/authorization required;
+- `FETCH_BLOCKED_403` — server denied the fetch;
+- `NOT_FOUND_404`;
+- `RATE_LIMITED_429`;
+- `HTTP_5XX`;
+- `FETCH_TIMEOUT`;
+- `FETCH_NETWORK_ERROR`;
+- `RESPONSE_TOO_LARGE`;
+- `CLIENT_RENDER_CONTENT_MISSING` — HTML arrived but contains only a client-render shell;
+- only actual upload/composer/send failures are `HANDOFF` failures.
+
+401/403/404/429 are not pointlessly retried. Network failures, timeouts, and 5xx retain bounded retry behavior.
+
+### Cleaner generic HTML
+
+The lightweight extractor now favors semantic `<main>` / `<article>` and removes common navigation/footer/sidebar/form/menu/login/language/toolbar wrappers plus active script/style/iframe noise.
+
+This remains a zero-dependency lightweight extractor; it does not claim parity with Mozilla Readability, Defuddle, or Trafilatura. If extraction quality becomes the dominant bottleneck, the project keeps the rule **Reuse > Adapt > Compose > Build from scratch** and should evaluate a mature extractor before growing endless site rules.
+
+### Safe multi-page articles
+
+V0.4 can follow same-origin `rel=next` or explicit article pagination such as “Next / 下一页” when the URL still belongs to the same article family:
+
+- same origin only;
+- generic Next links must remain in the same article family;
+- maximum 8 pages;
+- maximum 3 MiB per additional page;
+- all pages still share the global 12 MiB budget;
+- loop protection;
+- if a later page fails, already-fetched pages are preserved and output is marked `PARTIAL`.
+
+### Client-render shells: explicit failure, no silent session reuse
+
+Large HTML with an empty `root/app/__next`, explicit JavaScript-required text, or almost no useful body content becomes `CLIENT_RENDER_CONTENT_MISSING / RENDER`.
+
+**Generic browser navigation fallback is intentionally not enabled for arbitrary URLs.** Browser navigation may carry cookies and logged-in sessions. Silently reading private DOM and then handing it to another AI would create an unacceptable data-exfiltration boundary. Existing WorkBuddy and ChatGPT Share fallbacks remain pinned to their public-share hosts and paths.
 
 ## V0.3: clean conversation extraction
 
 ### ChatGPT public shares
 
-For `https://chatgpt.com/share/...`, Link2Context now:
-
-- recognizes the current public share-page `streamController.enqueue(...)` hydration payload;
-- decodes the turbo-stream positional-flatten wire format;
-- prefers `linear_conversation`, otherwise follows `current_node → parent` so alternate branches are not mixed into the active thread;
-- keeps **User** and **Assistant** message text;
-- omits system/tool/page-state/metadata noise by default;
-- turns images, audio, and attachments into lightweight placeholders instead of exposing large base64 blobs or internal asset pointers;
-- when direct fetch returns an unparseable shell/challenge page, automatic mode can open an inactive browser tab for the same public share URL, read its HTML, close the tab, and retry the clean extractor.
-
-Instead of raw `streamController.enqueue(...)` serialization, the target is clean output such as:
-
-```markdown
-# Conversation title
-
-Provider / 来源平台: ChatGPT
-Source / 来源链接: https://chatgpt.com/share/...
-
-## User / 用户
-...
-
-## Assistant / AI
-...
-```
+For `https://chatgpt.com/share/...`, Link2Context decodes public turbo-stream/hydration data, keeps only the active conversation branch, preserves User/Assistant text, and omits system/tool/page-state/large base64 noise. The browser fallback is restricted to the exact public ChatGPT Share URL.
 
 ### WorkBuddy shares
 
-`workbuddy.link/p/...` still resolves to the public `conversation-data.json`, but now uses the same normalized conversation Markdown schema as ChatGPT. User/assistant text is kept while large images, reasoning bodies, and tool payloads are omitted or represented by small placeholders.
+`workbuddy.link/p/...` resolves to the public `conversation-data.json` and uses the same clean conversation Markdown schema, omitting large images, reasoning bodies, and tool payloads.
+
+## Target-aware handoff
+
+- **ChatGPT + WorkBuddy / ChatGPT conversation share**: prefer a clean `.md` attachment.
+- **ChatGPT + generic text**: short content stays inline; around 24,000 characters switches to attachment.
+- **DeepSeek / other targets**: retain the 250,000-character global hard limit.
+- **PDF / image / archive / Office / audio/video / other binary**: original-file attachment.
+
+The progress panel now covers fetch, classification, pagination, page handoff, attachment confirmation, send, and typed terminal errors.
 
 ## Other link types
 
-- **Regular pages**: removes active/noisy page blocks and extracts readable text as Markdown.
-- **JSON / APIs**: parses the full JSON before rendering AI-readable structure and sniffs mislabeled responses.
-- **Plain text / XML / JavaScript**: wraps content with source metadata.
-- **PDF / images / ZIP / other binary files**: safely fetches and attempts to attach the file to the current web-AI message.
-- **Very long text**: converts to a `.md` attachment according to the destination's stability policy instead of overflowing a composer.
+- **HTML/article** → cleaned Markdown;
+- **JSON/API** → structured Markdown;
+- **plain text/XML/JavaScript/CSV** → text context;
+- **PDF/images/archives/Office/audio/video** → original attachment;
+- **very long text** → `.md` attachment according to the destination policy.
 
 ## Built-in web AI support
 
-ChatGPT, Claude, Gemini / Google AI Studio, Grok, Perplexity, DeepSeek, Doubao, Kimi, Qwen / Tongyi, Poe, Microsoft Copilot, Mistral Chat, and OpenRouter are built in.
+ChatGPT, Claude, Gemini / Google AI Studio, Grok, Perplexity, DeepSeek, Doubao, Kimi, Qwen / Tongyi, Poe, Microsoft Copilot, Mistral Chat, and OpenRouter.
 
-For another web AI, open that site, click Link2Context once, and choose **Enable current site**. URL-only chat messages can then use the same automatic path.
+For another web AI, open the site, click Link2Context, and choose **Enable current site**.
 
 ## Install (Chrome / Edge)
 
 1. Download or clone this repository.
-2. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
+2. Open `chrome://extensions` or `edge://extensions`.
 3. Enable Developer mode.
 4. Click **Load unpacked**.
-5. Select the repository's **`extension` directory**.
-6. After updating the repository, run `git pull`, reload Link2Context on the extensions page, and preferably refresh already-open AI tabs.
+5. Select the repository's `extension` directory.
+6. After an update, run `git pull`, reload the extension, and refresh already-open AI tabs.
 
 ## Security boundaries
 
-Link2Context has powerful cross-origin fetch permissions, so automatic mode keeps strict boundaries:
-
 - HTTP(S) only;
 - credential-bearing URLs rejected;
-- localhost, private/link-local, special-purpose IP ranges, and cloud metadata blocked;
-- every redirect target revalidated;
-- `targetAddressSpace: public` requested where Chromium supports it;
-- 12 MiB response cap plus network timeouts;
-- automatic fetch requires a real user event and the background verifies the calling web-AI host again;
-- ChatGPT / WorkBuddy browser fallbacks are pinned to the expected official host/path and are not exposed as generic browser proxies;
-- fetched text is explicitly marked as untrusted external data, not instructions;
-- likely secret query parameters are redacted from generated context;
-- ChatGPT serialized objects are decoded into null-prototype objects to prevent `__proto__` prototype pollution;
-- decoder depth, slot count, search nodes, and output message counts are bounded;
-- if an attachment cannot be confirmed by the destination AI, Link2Context does not silently fall back to dumping a large body into the composer; auto-send stops with an explicit error.
+- localhost/private/link-local/special-purpose/cloud-metadata addresses blocked;
+- every redirect revalidated;
+- `targetAddressSpace: public` requested when available;
+- response/time budgets enforced, including the global 12 MiB cap;
+- automatic fetch requires a real user gesture and verified destination-AI host;
+- WorkBuddy/ChatGPT Share browser fallbacks pinned to exact public hosts/paths;
+- fetched text explicitly marked untrusted external data, not instructions;
+- likely secret query parameters redacted;
+- ChatGPT serialized objects decoded into null-prototype objects;
+- attachment confirmation failure never fails open into a giant composer dump;
+- no bypass of authentication, CAPTCHAs, DRM, paywalls, or site access control.
 
 See [SECURITY.md](./SECURITY.md).
 
@@ -106,26 +143,21 @@ npm test
 npm run check
 ```
 
-V0.3 adds **15 adversarial review rounds** focused on public AI conversations → clean context: branch contamination, malformed promises, cyclic mappings, prototype pollution, base64 bloat, prompt injection, invalid timestamps, shell-page fallback, host/path escape, manual/automatic divergence, and more.
-
-V0.3.1 adds 14 target-aware handoff regressions covering ChatGPT/DeepSeek routing, lookalike hosts, soft/hard thresholds, invalid sizes, real sender-host binding, and progress/diagnostic metadata.
+V0.4 adds attacks around raw-byte classification, 401/403/404/429/5xx, network/timeouts, client-render shells, main-content cleaning, pagination escape/loops, and stage-preserving diagnostics, while retaining all V0.1–V0.3.1 regressions.
 
 See:
 
+- [V0.4 Universal Pipeline](./docs/V0.4-UNIVERSAL-PIPELINE.md)
+- [V0.4 Adversarial Review](./docs/ATTACK-REVIEW-V0.4.md)
 - [V0.3 Adversarial Review](./docs/ATTACK-REVIEW-V0.3.md)
-- [V0.3 Design](./docs/DESIGN-V0.3.md)
-- [V0.3.1 Target-aware Handoff Fix](./docs/HOTFIX-V0.3.1.md)
+- [V0.3.1 Target-aware Handoff](./docs/HOTFIX-V0.3.1.md)
 - [References](./docs/REFERENCES.md)
-
-## Prior art
-
-V0.3 was preceded by a GitHub collision/prior-art check. The current ChatGPT-share wire-format understanding was informed by `chickensintrees/chatgpt-share-reader`, while `pionxzh/chatgpt-exporter` informed conversation-export ideas. Earlier versions also studied MCP SuperAssistant, MarkDownload, and Defuddle.
-
-**Link2Context is an independent JavaScript implementation and does not directly copy source code from those projects.** The repository remains MIT-licensed.
 
 ## Compatibility boundary
 
-“Handle any link” means best-effort handling of HTTP(S) content the user's browser can normally access. It does not bypass authentication, CAPTCHAs, DRM, paywalls, or enterprise network policy. Dedicated extractors may need updates when upstream sites change; failures should be explicit instead of silently treating a megabyte of useless page internals as success.
+“Any URL” means best-effort handling of **public, legitimate HTTP(S) resources permitted by browser/network policy**. It does not mean bypassing access control.
+
+A 403 is now accurately reported as `FETCH_BLOCKED_403`, but Link2Context does not claim to bypass the remote CDN. A 401 becomes `AUTH_REQUIRED_401`, without stealing logged-in cookies. Client-only SPAs are reported as missing rendered content instead of treating a title-only shell as success.
 
 ## License
 
