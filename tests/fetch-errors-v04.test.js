@@ -48,12 +48,26 @@ test('5xx is retryable but remains typed after attempts are exhausted', async ()
   assert.equal(classifyFetchFailure(caught).code, 'HTTP_5XX');
 });
 
-test('network error may use HTTPS compatibility fallback and keeps diagnostic code', async () => {
+test('network error stays strict by default and never drops the public address-space guard', async () => {
   let calls = 0;
   let caught;
   try {
     await fetchBoundedWithRetry('https://example.com/a', {
       attempts: 1,
+      fetchFn: async () => { calls += 1; throw new TypeError('Failed to fetch'); },
+    });
+  } catch (error) { caught = error; }
+  assert.equal(calls, 1);
+  assert.equal(classifyFetchFailure(caught).code, 'FETCH_NETWORK_ERROR');
+});
+
+test('network compatibility retry remains available only through explicit opt-in', async () => {
+  let calls = 0;
+  let caught;
+  try {
+    await fetchBoundedWithRetry('https://example.com/a', {
+      attempts: 1,
+      proxyCompatibilityFallback: true,
       fetchFn: async () => { calls += 1; throw new TypeError('Failed to fetch'); },
     });
   } catch (error) { caught = error; }
