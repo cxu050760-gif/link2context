@@ -1,5 +1,46 @@
 # Changelog / 变更记录
 
+## V0.6.1 — 2026-08-22
+
+状态：V0.6.0 的安全/可靠性补丁候选；不扩大 V0.6 产品范围，不把缺少真实浏览器证据的能力从 `UNVERIFIED`（未验证）升级为 PASS。
+
+### 20 轮核心对抗加固
+
+- 保留 public `targetAddressSpace`（公网地址空间）保护，网络兼容回退不再默认削弱 SSRF / 私网边界；401/403/404/429 等非重试错误保持类型化失败。
+- 重定向逐跳重新验证，私网目标和 HTTPS→HTTP 降级保持 fail-closed（失败时不放行）。
+- OAuth code、token、signature、session、API key 等敏感 query 值从 AI-facing URL（面向 AI 的来源链接）中脱敏，fragment/hash 不进入上下文来源。
+- CDP（Chrome DevTools Protocol，Chrome 调试协议）在 attach 后、每个输入命令前重新校验当前 tab host，降低导航 TOCTOU（检查-使用竞态）风险。
+- V0.6 generic debugger（通用调试回退）继续只开放 Enter；任意文本注入只保留千问专用、已验证路径。
+- STOP 前后台共享 `startedAt` 任务身份；旧任务停止请求不会误杀新任务。
+- source partial / media partial（来源/媒体部分完成）向交付层传播；只要内容不完整就禁用自动发送，不把“部分成功”冒充完整成功。
+- 通用附件入口限制到当前 composer（输入区）；只有从当前输入区触发菜单后新出现的兼容 file input 才能作为受限回退。
+- 附件文件名证据限制在当前 composer/附件区域；页面其他文字不能伪造上传成功。
+- 严格尊重 `<input type="file" accept=...>`；没有兼容入口就失败，不临时移除 `accept`。
+- 原始 PDF、图片、Office、压缩包、音视频及其他二进制继续保留原文件附件；图片取消保持 `USER_CANCELLED`，不会被吞成 partial。
+- Authorized Browser Context（授权浏览器上下文）在导航后重新检查授权/deny-list，并绑定最初授权 origin；跨 origin 自动停止。
+- 自动“加载更多”不点击 form / submit 控件，也不点击跨源 anchor。
+- Article Identity（文章身份）校验阻止“下一页”静默串入下一篇文章；达到分页/总字节上限会显式 partial。
+- 结构化解析对巨型表格、超长单元格、海量列表设置资源上限，并暴露 `structuredTruncated`。
+- 外部 prompt-like text（类似提示词的网页文字）继续只作为 `untrusted-external` 数据，不能伪造 canonical trust boundary（规范信任边界）。
+
+完整矩阵见 `docs/V0.6.1-HARDENING.md`。
+
+### 继续自我迭代后的追加修复
+
+- 调试器入口和每个命令前的当前标签页复查现在都要求 **HTTPS**；允许域名的 HTTP 页面也会拒绝 CDP 输入。
+- debugger busy / attach failure / command failure / navigation denied（占用 / 连接失败 / 命令失败 / 导航越界）改为不同错误码，不再把执行失败误报成 attach 失败。
+- 首轮 hardening CI 暴露 3 个旧源码字符串断言；确认实现本身符合更严格契约后，测试改为验证新行为而不是旧写法。
+
+### 验证规则
+
+- `npm run check` 必须 PASS。
+- 全量 `npm test` 必须 PASS。
+- GitHub Actions CI 必须在最终 head 全绿。
+- CI 通过不等于第三方网页 AI 永久兼容；V0.6 / V0.6.1 尚未重新做 live smoke（真实浏览器冒烟）的能力继续保持 `UNVERIFIED`。
+- V0.5.3 千问真实输入/编辑/自动发送 PASS 继续仅作为历史基线。
+
+---
+
 ## V0.6.0 — 2026-08-22
 
 状态：本记录随 PR #11 合并到 `main` 生效；V0.6 功能开发已冻结。
