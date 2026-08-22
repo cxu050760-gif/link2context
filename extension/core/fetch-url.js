@@ -109,13 +109,22 @@ function compatibilityEligible(error) {
   return error instanceof TypeError || /failed to fetch|network|address space|local network/i.test(message);
 }
 
-async function retrySeries(initialUrl, options, attempts) {
+function emitProgress(onProgress, payload) {
+  try { onProgress?.(payload); } catch { /* progress reporting must never break fetch */ }
+}
+
+async function retrySeries(initialUrl, options, attempts, onProgress) {
   let lastError;
   for (let i = 0; i < attempts; i += 1) {
     try { return await fetchBounded(initialUrl, options); }
     catch (error) {
       lastError = error;
       if (i + 1 >= attempts || !retryableError(error)) throw error;
+      emitProgress(onProgress, {
+        stage: 'retry',
+        level: 'warn',
+        detail: `第 ${i + 1} 次直接抓取失败：${String(error?.message || error)}；准备第 ${i + 2}/${attempts} 次。`,
+      });
       await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
     }
   }
@@ -125,21 +134,29 @@ async function retrySeries(initialUrl, options, attempts) {
 export async function fetchBoundedWithRetry(initialUrl, options = {}) {
   const attempts = Math.max(1, Number(options.attempts ?? DEFAULT_ATTEMPTS));
   const proxyCompatibilityFallback = options.proxyCompatibilityFallback !== false;
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  const { onProgress: _ignored, ...fetchOptions } = options;
 
   try {
     return await retrySeries(initialUrl, {
-      ...options,
-      targetAddressSpace: options.targetAddressSpace ?? STRICT_TARGET_ADDRESS_SPACE,
-    }, attempts);
+      ...fetchOptions,
+      targetAddressSpace: fetchOptions.targetAddressSpace ?? STRICT_TARGET_ADDRESS_SPACE,
+    }, attempts, onProgress);
   } catch (strictError) {
     if (!proxyCompatibilityFallback || !compatibilityEligible(strictError)) throw strictError;
 
     const checked = validatePublicHttpUrl(initialUrl);
     if (checked.protocol !== 'https:') throw strictError;
 
+    emitProgress(onProgress, {
+      stage: 'compatibility-retry',
+      level: 'warn',
+      detail: `严格网络模式失败：${String(strictError?.message || strictError)}；正在进行一次 HTTPS 兼容重试。`,
+    });
+
     try {
       return await fetchBounded(checked, {
-        ...options,
+        ...fetchOptions,
         targetAddressSpace: null,
         requireHttps: true,
       });
