@@ -20,36 +20,69 @@ function normalizeUrl(value) {
   try {
     const url = new URL(raw);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+    url.hash = '';
     return url.href;
   } catch {
     return '';
   }
 }
 
-function normalizeBlock(block, index = 0) {
-  if (!block || typeof block !== 'object') throw new TypeError(`Invalid context block at ${index}`);
-  const type = text(block.type).toLowerCase();
-  if (!BLOCK_TYPES.has(type)) throw new TypeError(`Unsupported context block type: ${type || '(empty)'}`);
+function normalizeLinks(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const links = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const href = normalizeUrl(item.href);
+    const label = text(item.text).slice(0, 500);
+    if (!href) continue;
+    const key = `${href}\n${label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ href, text: label });
+    if (links.length >= 80) break;
+  }
+  return links;
+}
 
-  const provenance = {
+function provenanceFor(block) {
+  return {
     sourceUrl: normalizeUrl(block.provenance?.sourceUrl || block.sourceUrl),
     trust: EXTERNAL_TRUST,
     selector: text(block.provenance?.selector),
     page: Number.isInteger(block.provenance?.page) && block.provenance.page > 0 ? block.provenance.page : null,
   };
+}
+
+function normalizeBlock(block, index = 0) {
+  if (!block || typeof block !== 'object') throw new TypeError(`Invalid context block at ${index}`);
+  const type = text(block.type).toLowerCase();
+  if (!BLOCK_TYPES.has(type)) throw new TypeError(`Unsupported context block type: ${type || '(empty)'}`);
+  const provenance = provenanceFor(block);
 
   if (type === 'heading') {
-    return { type, level: Math.min(6, Math.max(1, Number(block.level) || 2)), text: text(block.text), provenance };
+    return {
+      type,
+      level: Math.min(6, Math.max(1, Number(block.level) || 2)),
+      text: text(block.text),
+      links: normalizeLinks(block.links),
+      provenance,
+    };
   }
   if (type === 'paragraph' || type === 'blockquote') {
-    return { type, text: text(block.text), provenance };
+    return { type, text: text(block.text), links: normalizeLinks(block.links), provenance };
   }
   if (type === 'list') {
     const items = Array.isArray(block.items) ? block.items.map(text).filter(Boolean) : [];
     return { type, ordered: Boolean(block.ordered), items, provenance };
   }
   if (type === 'code') {
-    return { type, language: text(block.language).replace(/[^a-z0-9_+.#-]/gi, '').slice(0, 40), text: String(block.text ?? '').replace(/\r\n?/g, '\n'), provenance };
+    return {
+      type,
+      language: text(block.language).replace(/[^a-z0-9_+.#-]/gi, '').slice(0, 40),
+      text: String(block.text ?? '').replace(/\r\n?/g, '\n'),
+      provenance,
+    };
   }
   if (type === 'table') {
     const headers = Array.isArray(block.headers) ? block.headers.map(text) : [];
@@ -88,6 +121,16 @@ function normalizeBlock(block, index = 0) {
   return { type: 'separator', provenance };
 }
 
+function normalizeMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key)) continue;
+    if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) out[key] = value;
+  }
+  return out;
+}
+
 export function createContextDocument({
   sourceUrl,
   sourceType = 'web',
@@ -114,15 +157,15 @@ export function createContextDocument({
       canonicalUrl: normalizeUrl(canonicalUrl),
     },
     metadata: {
+      ...normalizeMetadata(metadata),
       title: text(title),
       author: text(author),
       publishedAt: text(publishedAt),
       language: text(language),
       charset: text(charset).toLowerCase(),
       charsetSource: text(charsetSource),
-      ...metadata,
     },
-    blocks: blocks.map(normalizeBlock),
+    blocks: Array.isArray(blocks) ? blocks.map(normalizeBlock) : [],
   };
 }
 
@@ -144,10 +187,19 @@ function renderTable(block) {
   return lines.join('\n');
 }
 
+function renderInlineLinks(links = []) {
+  if (!links.length) return '';
+  const rendered = links.slice(0, 30).map((link) => `[${link.text || link.href}](${link.href})`).join(' · ');
+  return rendered ? `\n\nLinks / 链接: ${rendered}` : '';
+}
+
 function renderBlock(block) {
-  if (block.type === 'heading') return `${'#'.repeat(block.level)} ${block.text}`.trim();
-  if (block.type === 'paragraph') return block.text;
-  if (block.type === 'blockquote') return block.text.split('\n').map((line) => `> ${line}`).join('\n');
+  if (block.type === 'heading') return `${'#'.repeat(block.level)} ${block.text}${renderInlineLinks(block.links)}`.trim();
+  if (block.type === 'paragraph') return `${block.text}${renderInlineLinks(block.links)}`.trim();
+  if (block.type === 'blockquote') {
+    const quote = block.text.split('\n').map((line) => `> ${line}`).join('\n');
+    return `${quote}${renderInlineLinks(block.links)}`.trim();
+  }
   if (block.type === 'list') return block.items.map((item, i) => `${block.ordered ? `${i + 1}.` : '-'} ${item}`).join('\n');
   if (block.type === 'code') return `\`\`\`${block.language}\n${block.text}\n\`\`\``;
   if (block.type === 'table') return renderTable(block);
@@ -178,7 +230,9 @@ export function renderContextMarkdown(document) {
   if (meta.title) lines.push(`Title / 标题: ${meta.title}`);
   if (meta.author) lines.push(`Author / 作者: ${meta.author}`);
   if (meta.publishedAt) lines.push(`Published / 发布: ${meta.publishedAt}`);
+  if (meta.language) lines.push(`Language / 语言: ${meta.language}`);
   if (meta.charset) lines.push(`Encoding / 编码: ${meta.charset}${meta.charsetSource ? ` (${meta.charsetSource})` : ''}`);
+  if (meta.extractionStrategy) lines.push(`Extraction / 提取策略: ${meta.extractionStrategy}`);
   lines.push('', '--- BEGIN UNTRUSTED EXTERNAL CONTENT / 不可信外部内容开始 ---', '');
   for (const block of document.blocks || []) {
     const rendered = renderBlock(block);
@@ -189,9 +243,13 @@ export function renderContextMarkdown(document) {
 }
 
 export function contextStats(document) {
-  const stats = { blocks: 0, headings: 0, paragraphs: 0, code: 0, tables: 0, images: 0, links: 0, attachments: 0 };
+  const stats = {
+    blocks: 0, headings: 0, paragraphs: 0, code: 0, tables: 0,
+    images: 0, links: 0, attachments: 0, inlineLinks: 0,
+  };
   for (const block of document?.blocks || []) {
     stats.blocks += 1;
+    stats.inlineLinks += Array.isArray(block.links) ? block.links.length : 0;
     if (block.type === 'heading') stats.headings += 1;
     else if (block.type === 'paragraph') stats.paragraphs += 1;
     else if (block.type === 'code') stats.code += 1;
