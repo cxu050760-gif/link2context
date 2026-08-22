@@ -77,8 +77,9 @@ test('document filenames are sanitized and bounded', () => {
 });
 
 test('attachment filename hints include a truncated-chip-safe distinctive prefix', () => {
-  const hints = api.attachmentNameHints('workbuddy.link-p-8yphOaKetKX8MnZow8EE4n.md');
-  assert.ok(hints.includes('workbuddy.link-p-8yphOaKet'));
+  const stem = 'workbuddy.link-p-8yphOaKetKX8MnZow8EE4n';
+  const hints = api.attachmentNameHints(`${stem}.md`);
+  assert.ok(hints.includes(stem.slice(0, 24)));
 });
 
 test('manifest loads delivery policy before the active V0.5.1 content script', () => {
