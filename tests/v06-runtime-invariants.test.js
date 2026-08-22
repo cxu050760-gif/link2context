@@ -28,7 +28,8 @@ test('v0.6 debugger revalidates the current tab host after attach and before eac
   assert.match(background, /async function requireCurrentDebuggerHost/);
   assert.match(background, /chrome\.tabs\.get\(tabId\)/);
   assert.match(background, /QIANWEN_DEBUGGER_NAVIGATION_DENIED/);
-  assert.match(background, /TARGET_DEBUGGER_NAVIGATION_DENIED/);
+  assert.match(background, /const navigationCode = String\(prefix\) \+ '_NAVIGATION_DENIED'/);
+  assert.match(background, /pressEnterViaDebugger\(tabId, 'TARGET_DEBUGGER', isV06AutoSendFallbackHost\)/);
   const insert = background.slice(background.indexOf('async function insertTextViaDebugger'), background.indexOf('async function pressEnterViaDebugger'));
   assert.match(insert, /requireCurrentDebuggerHost[\s\S]*Input\.insertText/);
   const enter = background.slice(background.indexOf('async function pressEnterViaDebugger'), background.indexOf('async function explicitAutoSendEnabled'));
