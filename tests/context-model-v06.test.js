@@ -34,7 +34,7 @@ test('v0.6 context model: structure and inline links survive markdown rendering'
     metadata: { extractionStrategy: 'mozilla-readability+structured-dom' },
     blocks: [
       { type: 'heading', level: 2, text: 'Setup' },
-      { type: 'paragraph', text: 'Read this first.', links: [{ text: 'manual', href: '/manual' }, { text: 'bad', href: 'javascript:alert(1)' }] },
+      { type: 'paragraph', text: 'Read this first.', links: [{ text: 'manual', href: 'https://example.com/manual' }, { text: 'bad', href: 'javascript:alert(1)' }] },
       { type: 'list', ordered: false, items: ['One', 'Two'] },
       { type: 'code', language: 'js', text: 'console.log("ok")' },
       { type: 'table', caption: 'Scores', headers: ['Name', 'Value'], rows: [['A', '1|2']] },
