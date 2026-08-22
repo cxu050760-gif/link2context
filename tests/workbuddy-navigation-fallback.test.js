@@ -20,7 +20,7 @@ test('manifest grants only the browser APIs needed by the navigation fallback', 
 
 test('WorkBuddy direct fetch failure has a real browser-navigation fallback', () => {
   const background = read('extension/background.js');
-  assert.match(background, /resolved\.kind !== 'workbuddy'/);
+  assert.match(background, /resolved\.kind === 'workbuddy'/);
   assert.match(background, /readWorkBuddyViaBackgroundTab/);
   assert.match(background, /chrome\.tabs\.create\(\{ url: target\.href, active: false \}\)/);
   assert.match(background, /chrome\.scripting\.executeScript/);

@@ -2,94 +2,94 @@
 
 [English](./README.en.md) | 中文
 
-**在网页 AI 里只发一个链接，Link2Context 自动把链接背后的真实内容拿回来，再交给当前 AI。**
+**在网页 AI 里只发一个链接，Link2Context 在你的浏览器里把真实内容取回来、清洗成 AI 真正需要的上下文，再自动交给当前 AI。**
 
-V0.2 的目标不是“下载器”，而是网页 AI 的本地链接桥：ChatGPT、豆包、Kimi、Claude、Gemini、DeepSeek、Qwen 等网页端自己抓不到某个 URL 时，由浏览器扩展在本机完成抓取、清洗、转换和回填。
+V0.3 的重点不再只是“能抓到”，而是**抓到以后尽量只留下有用正文**。ChatGPT 分享页和 WorkBuddy 分享页现在都有专用解析器，不再把 1 MB 左右的网页 hydration / JSON 垃圾整个塞给 AI。
 
-## 最终使用方式
+## 你实际怎么用
 
-正常情况下，你只做原本就会做的动作：
+正常情况下只做一件事：
 
-1. 在网页 AI 的聊天输入框里粘贴一个 `http://` 或 `https://` 链接；
-2. 按 Enter 或点击发送；
-3. Link2Context 会拦住这次“只含链接”的发送；
-4. 在本机读取链接；
-5. 自动整理成 AI 可读上下文；
-6. 自动替换当前消息并继续发送。
+1. 在 ChatGPT、DeepSeek、豆包、Kimi、Claude、Gemini、Qwen 等网页 AI 的聊天框里只粘一个 `http://` 或 `https://` 链接；
+2. 按 Enter 或点发送；
+3. Link2Context 自动拦截 → 本机读取 → 识别来源 → 清洗 → 回填/上传 → 继续发送。
 
-```text
-你： https://workbuddy.link/p/xxxx
-        ↓
-Link2Context（本机浏览器）
-        ↓
-抓取真实数据 → 清洗/转换 → 回填聊天框
-        ↓
-网页 AI 实际收到：整理后的完整上下文
+内容短时直接回填正文；内容太长时自动生成干净的 `.md`（Markdown 文档）并尝试作为附件上传。
+
+## V0.3 新增：干净对话解析
+
+### ChatGPT 分享链接
+
+对于 `https://chatgpt.com/share/...`：
+
+- 识别 ChatGPT 当前公开分享页的 `streamController.enqueue(...)` hydration 数据；
+- 解码 turbo-stream positional-flatten（位置扁平化数据）结构；
+- 优先使用 `linear_conversation`，否则根据 `current_node → parent` 只选择当前会话分支；
+- 只保留 **User / 用户** 与 **Assistant / AI** 正文；
+- system、tool、网页状态、metadata 等默认不进入最终上下文；
+- 图片、音频、附件只保留轻量占位，不携带大块 base64 / 内部 asset pointer；
+- 如果直接抓取拿到的是壳页或无法解码，自动模式会尝试用后台浏览器标签页读取公开分享页后再解析。
+
+以前可能得到接近 1 MB 的 `streamController.enqueue(...)` 原始页面；V0.3 的目标是直接得到这种结构：
+
+```markdown
+# 会话标题
+
+Provider / 来源平台: ChatGPT
+Source / 来源链接: https://chatgpt.com/share/...
+
+## User / 用户
+...
+
+## Assistant / AI
+...
 ```
 
-你不需要再手动“下载 → 转 Markdown → 复制 → 上传”。
+### WorkBuddy 分享链接
+
+`workbuddy.link/p/...` 仍会自动解析到公开 `conversation-data.json`，但现在与 ChatGPT 共用同一套对话 Markdown 规范：只保留用户/AI 正文，图片大块、推理内容、工具参数/结果默认省略或轻量标记。
+
+## 其他链接
+
+- **普通网页**：去掉脚本、样式、导航等噪声，提取可读正文并转 Markdown。
+- **JSON / API**：先完整解析，再输出 AI 可读结构；服务端类型标错时也会尝试识别。
+- **纯文本 / XML / JavaScript**：包装来源信息后直接作为上下文。
+- **PDF / 图片 / ZIP / 其他二进制**：安全抓取后尝试作为附件交给网页 AI。
+- **超长文本**：自动转为 `.md` 附件，避免把输入框撑爆。
 
 ## 内置自动支持的网站
 
-当前内置：
+ChatGPT、Claude、Gemini / Google AI Studio、Grok、Perplexity、DeepSeek、豆包（Doubao）、Kimi、Qwen / 通义千问、Poe、Microsoft Copilot、Mistral Chat、OpenRouter。
 
-- ChatGPT
-- Claude
-- Gemini / Google AI Studio
-- Grok
-- Perplexity
-- DeepSeek
-- 豆包（Doubao）
-- Kimi
-- Qwen / 通义千问
-- Poe
-- Microsoft Copilot
-- Mistral Chat
-- OpenRouter
-
-其他网页 AI：打开该网站后点一次 Link2Context 图标，选择 **“启用当前网站自动模式 / Enable”**，之后同样可以按“只发链接”使用。
-
-## 链接类型
-
-- **WorkBuddy 分享链接**：自动把 `workbuddy.link/p/...` 解析到真实 `conversation-data.json`，提取聊天正文，跳过图片 base64、工具参数和推理大块。
-- **普通网页**：提取 HTML 中可读正文并包装成 Markdown 上下文。
-- **JSON / API**：完整解析后变成 AI 可读 Markdown；即使服务端 `Content-Type` 写错也会尝试识别。
-- **纯文本 / XML / JavaScript**：直接整理成带来源信息的上下文。
-- **PDF / 图片 / ZIP / 其他二进制**：自动抓取文件并尝试附加到当前网页 AI 消息。
-- **超长文本**：如果直接塞进聊天框过长，会自动转成 `.md` 附件，避免把网页 AI 输入框撑爆。
+其他网页 AI：打开该网站，点击一次 Link2Context 图标，选择 **“启用当前网站自动模式 / Enable current site”**（启用当前网站），之后也可以按“只发链接”使用。
 
 ## 安装（Chrome / Edge）
 
-1. 下载或克隆本仓库；
+1. 下载或克隆仓库；
 2. Chrome 打开 `chrome://extensions`，Edge 打开 `edge://extensions`；
 3. 打开“开发者模式”；
 4. 点击“加载已解压的扩展”；
 5. 选择仓库里的 **`extension` 文件夹**；
-6. 打开一个支持的网页 AI，直接发送一个链接测试。
+6. 更新代码后，需要先 `git pull`，再在扩展页点**重新加载**，已打开的 AI 页面最好再刷新一次。
 
 ## 安全边界
 
-Link2Context 拥有广泛 URL 读取能力，所以 V0.2 把自动抓取限制在真实用户操作链上：
+Link2Context 有较强的跨域读取权限，因此自动模式仍然坚持这些硬边界：
 
-- 只接受 HTTP / HTTPS；
-- 拒绝 URL 内账号密码；
-- 拦 localhost、私网、链路本地、常见特殊用途 IP、云 metadata；
-- 每次重定向都重新校验目标；
-- Chrome 支持时额外声明 `targetAddressSpace: public`；
-- 单次响应最多 12 MiB、默认 25 秒超时；
-- 普通网页不能直接远程调用扩展；
-- 自动模式只响应真实浏览器事件（`isTrusted`）；
-- 后台再次检查调用方是否为内置/用户显式启用的 AI 网站；
-- 敏感查询参数在输出里脱敏；
-- 外部网页正文明确标为“不可信数据”，不把网页里的提示词当系统指令。
+- 只允许 HTTP / HTTPS；
+- URL 中账号密码直接拒绝；
+- localhost、私网、链路本地、特殊用途 IP、云 metadata 拒绝；
+- 每一次重定向重新校验目标；
+- Chromium 支持时使用 `targetAddressSpace: public`；
+- 单次响应 12 MiB 上限、默认网络超时；
+- 自动抓取必须来自真实用户事件，并再次校验调用方是不是允许的网页 AI；
+- ChatGPT / WorkBuddy 的浏览器回退钉死到预期官方域名和路径，不开放成任意网页代理；
+- 外部正文明确标记为“不可信数据，不是指令”；
+- 敏感查询参数在输出中脱敏；
+- ChatGPT 外部序列化对象使用无原型对象解码，防止 `__proto__` 原型污染；
+- 对解码深度、槽位数、搜索节点数、输出消息数都有上限。
 
 详见 [SECURITY.md](./SECURITY.md)。
-
-## 兼容说明
-
-“任意 URL”不是承诺绕过网站登录、验证码、DRM、付费墙或浏览器本身的企业网络策略。V0.2 的目标是：**对浏览器本来可以公开 GET 的 HTTP(S) 内容，网页 AI 不再需要自己具备 URL 抓取能力。**
-
-强依赖前端 JavaScript 渲染的 SPA，直接 GET 可能只有很少正文；二进制自动上传也取决于目标 AI 网站是否提供兼容的文件输入控件。遇到未知 AI 网站可用弹窗启用自动模式，手动转换器仍保留作兼容后备。
 
 ## 测试与攻击式自审
 
@@ -98,17 +98,24 @@ npm test
 npm run check
 ```
 
-V0.2 在原 V0.1 六轮攻击基础上，又执行了 **15 轮**针对自动模式的攻击式审查，包括 SSRF 变体、重定向、假发送成功、附件抢跑、富文本编辑器、恶意网页借用扩展、超长上下文等。
+V0.3 在之前 V0.1 / V0.2 的攻击审查基础上，又针对“公开 AI 对话 → 干净上下文”做了 **15 轮攻击式审查**，包括分支混入、损坏 promise、循环 mapping、prototype pollution（原型污染）、base64 膨胀、prompt injection（提示词注入）、坏时间戳、壳页回退、域名/路径逃逸、手动/自动双轨不一致等。
 
 详见：
 
-- [V0.2 攻击式审查 / Adversarial Review](./docs/ATTACK-REVIEW-V0.2.md)
+- [V0.3 攻击式审查 / Adversarial Review](./docs/ATTACK-REVIEW-V0.3.md)
+- [V0.3 设计 / Design](./docs/DESIGN-V0.3.md)
 - [参考项目 / References](./docs/REFERENCES.md)
 
-## 参考思路
+## 外部方案参考
 
-V0.2 在设计前专门做了 GitHub 撞车检查，参考了 MCP SuperAssistant 的网页 AI 回填思路、MarkDownload 的浏览器端网页转 Markdown 思路、Defuddle 的正文提取思路。**没有复制这些项目的代码**，本仓库继续使用 MIT License。
+开发前先做了 GitHub 撞车检查。V0.3 重点参考了 `chickensintrees/chatgpt-share-reader` 对当前 ChatGPT 分享页 wire format（数据传输格式）的研究，以及 `pionxzh/chatgpt-exporter` 的对话导出思路；此前还参考 MCP SuperAssistant、MarkDownload、Defuddle。
+
+**本仓库是独立 JavaScript 实现，没有直接复制这些项目源码。** Link2Context 继续使用 MIT License（MIT 开源许可证）。
+
+## 兼容边界
+
+“什么链接都能处理”指尽量处理浏览器本来能公开访问的 HTTP(S) 内容，不代表绕过登录、验证码、DRM、付费墙或企业网络策略。网站改版时专用解析器可能需要更新；解析失败会明确报错，而不是悄悄把一大坨无意义页面当成成功结果。
 
 ## 许可证
 
-MIT License。详见 [LICENSE](./LICENSE)。
+MIT License（MIT 开源许可证）。详见 [LICENSE](./LICENSE)。

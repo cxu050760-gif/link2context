@@ -1,9 +1,10 @@
 import { validatePublicHttpUrl } from './core/url-safety.js';
-import { resolveSpecialUrl } from './core/workbuddy.js';
+import { resolveSourceUrl } from './core/source-router.js';
 import { decodeBytes, sniffTextKind, truncateText } from './core/fetch-policy.js';
 import { fetchBoundedWithRetry } from './core/fetch-url.js';
 import { htmlToMarkdown } from './core/html-lite.js';
 import { jsonTextToMarkdown, textToMarkdown } from './core/normalize.js';
+import { chatGptShareHtmlToMarkdown } from './core/chatgpt-share.js';
 import { isKnownAiHost, normalizeHost } from './core/auto-bridge.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +19,12 @@ function setStatus(msg, isError = false) {
 function safeFilename(url, ext = '.md') {
   const base = `${url.hostname}${url.pathname}`.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'context';
   return base.endsWith(ext) ? base : `${base}${ext}`;
+}
+
+function contextFilename(resolved, sourceUrl) {
+  if (resolved.kind === 'workbuddy') return `workbuddy-${resolved.shareCode}.md`;
+  if (resolved.kind === 'chatgpt-share') return `chatgpt-${resolved.shareId}.md`;
+  return safeFilename(sourceUrl);
 }
 
 async function getCustomHosts() {
@@ -55,19 +62,25 @@ async function refreshSiteUi() {
 
 async function convert() {
   try {
-    setStatus('正在获取… / Fetching…');
+    setStatus('正在获取并清洗… / Fetching and cleaning…');
     $('copy').disabled = true;
     $('save').disabled = true;
     const sourceUrl = validatePublicHttpUrl($('url').value.trim());
-    const resolved = resolveSpecialUrl(sourceUrl);
-    const { res, bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
+    const resolved = resolveSourceUrl(sourceUrl);
+    const { bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
     const decoded = decodeBytes(bytes, contentType);
     const type = resolved.kind === 'workbuddy' ? 'json' : sniffTextKind(contentType, decoded);
-    if (type === 'binary') throw new Error('This link points to a binary file. Use “Download original”. / 该链接是二进制文件，请使用“下载原文件”。');
+    if (resolved.kind === 'generic' && type === 'binary') {
+      throw new Error('This link points to a binary file. Use “Download original”. / 该链接是二进制文件，请使用“下载原文件”。');
+    }
+
     let markdown;
     let inputTruncated = false;
-    if (resolved.kind === 'workbuddy') markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'workbuddy');
-    else if (type === 'json') {
+    if (resolved.kind === 'workbuddy') {
+      markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'workbuddy');
+    } else if (resolved.kind === 'chatgpt-share') {
+      markdown = chatGptShareHtmlToMarkdown(decoded, sourceUrl.href);
+    } else if (type === 'json') {
       try { markdown = jsonTextToMarkdown(decoded, sourceUrl.href, 'generic'); }
       catch { markdown = textToMarkdown(decoded, sourceUrl.href, 'Malformed JSON / 非标准 JSON'); }
     } else {
@@ -75,15 +88,16 @@ async function convert() {
       inputTruncated = limited.truncated;
       markdown = type === 'html' ? htmlToMarkdown(limited.text, sourceUrl.href) : textToMarkdown(limited.text, sourceUrl.href);
     }
+
     const limitedOutput = truncateText(markdown);
     markdown = limitedOutput.text;
     if (inputTruncated || limitedOutput.truncated) markdown += '\n\n> ⚠️ Output was truncated by the safety limit. / 输出因安全上限被截断。';
     state.markdown = markdown;
-    state.filename = resolved.kind === 'workbuddy' ? `workbuddy-${resolved.shareCode}.md` : safeFilename(sourceUrl);
+    state.filename = contextFilename(resolved, sourceUrl);
     $('output').value = markdown;
     $('copy').disabled = false;
     $('save').disabled = false;
-    setStatus(`完成 / Done · ${Math.round(bytes.byteLength / 1024)} KiB · ${resolved.kind}`);
+    setStatus(`完成 / Done · 原始 ${Math.round(bytes.byteLength / 1024)} KiB · ${resolved.kind} → clean Markdown`);
   } catch (err) { setStatus(`${err?.message || err}`, true); }
 }
 
@@ -91,12 +105,15 @@ async function downloadOriginal() {
   try {
     setStatus('正在安全下载… / Fetching safely…');
     const sourceUrl = validatePublicHttpUrl($('url').value.trim());
-    const resolved = resolveSpecialUrl(sourceUrl);
+    const resolved = resolveSourceUrl(sourceUrl);
     const { bytes, contentType } = await fetchBoundedWithRetry(resolved.fetchUrl, { attempts: 2 });
     const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
     const objectUrl = URL.createObjectURL(blob);
-    const rawName = sourceUrl.pathname.split('/').filter(Boolean).pop() || (resolved.kind === 'workbuddy' ? 'conversation-data.json' : 'download.bin');
-    const filename = rawName.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 120) || 'download.bin';
+    const fallbackName = resolved.kind === 'workbuddy' ? 'conversation-data.json'
+      : resolved.kind === 'chatgpt-share' ? `chatgpt-${resolved.shareId}.html`
+        : 'download.bin';
+    const rawName = sourceUrl.pathname.split('/').filter(Boolean).pop() || fallbackName;
+    const filename = rawName.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 120) || fallbackName;
     try { await chrome.downloads.download({ url: objectUrl, filename, saveAs: true }); }
     finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000); }
     setStatus('下载完成 / Download ready');
