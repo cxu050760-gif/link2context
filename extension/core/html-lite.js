@@ -234,7 +234,7 @@ export function discoverNextPage(html, currentUrl) {
     const declaredPage = Number(attrValue(attrs, 'data-page') || attrValue(attrs, 'data-page-number') || attrValue(attrs, 'data-pageno'));
     let href = explicitTargetFromAttrs(attrs);
     if (!href && Number.isInteger(declaredPage) && declaredPage > 0) href = synthesizePageQuery(currentUrl, declaredPage) || '';
-    const target = href ? safePaginationTarget(currentUrl, href, strongRelNext || semanticNext) : null;
+    const target = href ? safePaginationTarget(currentUrl, href, strongRelNext) : null;
 
     if (strongRelNext) pushCandidate(candidates, target, 130, 'control-rel-next', pageNumberFromUrl(target));
     else if (semanticNext && target) pushCandidate(candidates, target, tag === 'a' ? 110 : 105, tag === 'a' ? 'semantic-next' : 'data-semantic-next', pageNumberFromUrl(target));
