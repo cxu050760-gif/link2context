@@ -23,6 +23,12 @@ test('delivery mode defaults unknown values to auto', () => {
   assert.equal(api.normalizeMode('DOCUMENT'), 'document');
 });
 
+test('send mode defaults unknown values to manual review', () => {
+  assert.equal(api.normalizeSendMode(undefined), 'manual');
+  assert.equal(api.normalizeSendMode('garbage'), 'manual');
+  assert.equal(api.normalizeSendMode('AUTO'), 'auto');
+});
+
 test('document mode turns inline text results into Markdown documents', () => {
   assert.equal(JSON.stringify(api.plan({ mode: 'document', resultKind: 'html', convertedFromText: false, textChars: 1000 })),
     JSON.stringify({ action: 'document', reason: 'user-document' }));
@@ -70,6 +76,11 @@ test('document filenames are sanitized and bounded', () => {
   assert.doesNotMatch(name, /[\\/:*?"<>|]/);
 });
 
+test('attachment filename hints include a truncated-chip-safe distinctive prefix', () => {
+  const hints = api.attachmentNameHints('workbuddy.link-p-8yphOaKetKX8MnZow8EE4n.md');
+  assert.ok(hints.includes('workbuddy.link-p-8yphOaKet'));
+});
+
 test('manifest loads delivery policy before the active V0.5.1 content script', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const scripts = manifest.content_scripts[0].js;
@@ -85,9 +96,23 @@ test('popup exposes explicit Auto, Markdown document, and long-text choices', ()
   assert.match(html, /value="text"/);
 });
 
+test('popup exposes manual review versus auto-send separately', () => {
+  const html = read('extension/popup.html');
+  assert.match(html, /id="sendPreference"/);
+  assert.match(html, /value="manual"/);
+  assert.match(html, /自动发送 \/ Auto-send/);
+});
+
 test('popup persists the delivery mode in extension storage', () => {
   const popup = read('extension/popup.js');
   assert.match(popup, /HANDOFF_PREFERENCE_KEY/);
   assert.match(popup, /chrome\.storage\.local\.set\(\{ \[HANDOFF_PREFERENCE_KEY\]: mode \}\)/);
   assert.match(popup, /refreshHandoffPreferenceUi/);
+});
+
+test('popup persists send mode independently in extension storage', () => {
+  const popup = read('extension/popup.js');
+  assert.match(popup, /SEND_PREFERENCE_KEY/);
+  assert.match(popup, /chrome\.storage\.local\.set\(\{ \[SEND_PREFERENCE_KEY\]: mode \}\)/);
+  assert.match(popup, /refreshSendPreferenceUi/);
 });
