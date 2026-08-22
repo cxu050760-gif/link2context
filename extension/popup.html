@@ -9,19 +9,30 @@
 <body>
   <main>
     <h1>Link2Context</h1>
-    <p class="sub">链接 → AI 上下文 / Link → AI-ready context</p>
-    <label for="url">链接 / URL</label>
-    <textarea id="url" rows="3" placeholder="https://..."></textarea>
-    <div class="row">
-      <button id="convert">转换 / Convert</button>
-      <button id="downloadOriginal" class="secondary">下载原文件 / Download original</button>
-    </div>
-    <p id="status" role="status"></p>
-    <textarea id="output" rows="12" readonly placeholder="转换后的 Markdown 会显示在这里。"></textarea>
-    <div class="row">
-      <button id="copy" class="secondary" disabled>复制 / Copy</button>
-      <button id="save" class="secondary" disabled>保存 .md / Save</button>
-    </div>
+    <p class="sub">只发链接 → 网页 AI 自动拿到内容 / Paste link → AI gets content</p>
+
+    <section class="auto-box">
+      <strong>网页 AI 自动模式 / Auto mode</strong>
+      <p id="siteStatus">正在检测当前网站…</p>
+      <button id="toggleSite" class="secondary" hidden></button>
+      <p class="hint">ChatGPT、豆包、Kimi、Claude、Gemini、DeepSeek、千问等已内置支持；其他网页 AI 可在这里一键启用。</p>
+    </section>
+
+    <details>
+      <summary>手动转换工具 / Manual converter</summary>
+      <label for="url">链接 / URL</label>
+      <textarea id="url" rows="3" placeholder="https://..."></textarea>
+      <div class="row">
+        <button id="convert">转换 / Convert</button>
+        <button id="downloadOriginal" class="secondary">下载原文件 / Download original</button>
+      </div>
+      <p id="status" role="status"></p>
+      <textarea id="output" rows="10" readonly placeholder="转换后的 Markdown 会显示在这里。"></textarea>
+      <div class="row">
+        <button id="copy" class="secondary" disabled>复制 / Copy</button>
+        <button id="save" class="secondary" disabled>保存 .md / Save</button>
+      </div>
+    </details>
   </main>
   <script type="module" src="popup.js"></script>
 </body>
