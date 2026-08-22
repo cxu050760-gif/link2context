@@ -22,6 +22,6 @@ test('extension is self-contained when extension/ is loaded unpacked', () => {
 test('original download does not bypass the bounded fetch path', () => {
   const popup = fs.readFileSync(path.join(extensionRoot, 'popup.js'), 'utf8');
   const fn = popup.slice(popup.indexOf('async function downloadOriginal'), popup.indexOf("$('convert').addEventListener"));
-  assert.match(fn, /fetchBounded\(resolved\.fetchUrl\)/);
+  assert.match(fn, /fetchBoundedWithRetry\(resolved\.fetchUrl/);
   assert.doesNotMatch(fn, /downloads\.download\(\{\s*url:\s*resolved\.fetchUrl\.href/);
 });
