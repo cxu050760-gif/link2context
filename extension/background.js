@@ -124,9 +124,10 @@ async function browserContextPolicy(input) {
   };
 }
 
-function makeProgressReporter(sender) {
+function makeProgressReporter(sender, requestedStartedAt = 0) {
   const tabId = sender?.tab?.id;
-  const startedAt = Date.now();
+  const requested = Number(requestedStartedAt);
+  const startedAt = Number.isSafeInteger(requested) && requested > 0 ? requested : Date.now();
   const report = (stage, label, detail = '', extra = {}) => {
     if (!Number.isInteger(tabId)) return;
     const payload = {
@@ -319,7 +320,10 @@ async function readBinaryInsideAuthorizedTab(tabId, maxBytes = MAX_FETCH_BYTES) 
     target: { tabId },
     func: async (limit) => {
       try {
-        const response = await fetch(location.href, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+        // This request carries the user's browser credentials. Never allow an
+        // HTTP redirect to choose a second origin after that credentialed request
+        // has begun; fail closed and let the outer acquisition report the error.
+        const response = await fetch(location.href, { credentials: 'include', cache: 'no-store', redirect: 'error' });
         if (!response.ok) return { ok: false, status: response.status, statusText: response.statusText || '' };
         const announced = Number(response.headers.get('content-length') || 0);
         if (Number.isFinite(announced) && announced > limit) return { ok: false, tooLarge: true, announced };
@@ -331,7 +335,7 @@ async function readBinaryInsideAuthorizedTab(tabId, maxBytes = MAX_FETCH_BYTES) 
         for (let i = 0; i < bytes.length; i += step) binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + step, bytes.length)));
         return {
           ok: true,
-          href: location.href,
+          href: response.url || location.href,
           contentType: response.headers.get('content-type') || document.contentType || '',
           contentDisposition: response.headers.get('content-disposition') || '',
           base64: btoa(binary),
@@ -354,6 +358,18 @@ async function readViaAuthorizedBrowser(input, {
   reason = 'render',
 } = {}) {
   const target = validatePublicHttpUrl(input);
+  const expectedOrigin = target.origin;
+  const requireExpectedOrigin = (value) => {
+    const checked = validatePublicHttpUrl(value);
+    if (checked.origin !== expectedOrigin) {
+      throw new PipelineFailure(
+        'BROWSER_CONTEXT_CROSS_ORIGIN_NAVIGATION',
+        failureStage,
+        `Authorized browser navigation left ${expectedOrigin} for ${checked.origin}; refusing to reuse browser credentials across origins. / 授权浏览器已从 ${expectedOrigin} 跳转到 ${checked.origin}，已拒绝跨来源继续使用浏览器登录态。`,
+      );
+    }
+    return checked;
+  };
   const policy = await browserContextPolicy(target);
   if (policy.denied) {
     throw new PipelineFailure('BROWSER_CONTEXT_DENIED_FOR_SITE', failureStage, `Browser-session fallback is disabled for ${policy.deniedBy}. / 已禁止对 ${policy.deniedBy} 使用浏览器登录态回退。`);
@@ -385,7 +401,7 @@ async function readViaAuthorizedBrowser(input, {
     while (Date.now() - started < timeoutMs) {
       throwIfCancelled(signal);
       const tab = await chrome.tabs.get(tabId);
-      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) validatePublicHttpUrl(tab.url);
+      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) requireExpectedOrigin(tab.url);
       if (tab?.status !== 'complete') {
         await sleep(220, signal);
         continue;
@@ -411,7 +427,7 @@ async function readViaAuthorizedBrowser(input, {
         await sleep(300, signal);
         continue;
       }
-      const finalUrl = validatePublicHttpUrl(page.href || tab.url || target.href);
+      const finalUrl = requireExpectedOrigin(page.href || tab.url || target.href);
 
       if (isLikelyBinaryDocument(page.contentType)) {
         report('browser-context-binary', '浏览器已打开资源，正在读取原文件 / Reading original resource in authorized context', `${page.contentType || 'binary'} · ${finalUrl.hostname}`);
@@ -422,12 +438,13 @@ async function readViaAuthorizedBrowser(input, {
           if (raw?.status === 403) throw new PipelineFailure('FETCH_BLOCKED_403', 'FETCH', `HTTP 403 ${raw.statusText || ''} / 即使使用授权浏览器上下文仍被服务器拒绝`, { status: 403 });
           throw new PipelineFailure('BROWSER_CONTEXT_BINARY_FETCH_FAILED', 'FETCH', raw?.error || 'Authorized browser could not read original resource / 授权浏览器无法读取原文件');
         }
+        const rawUrl = requireExpectedOrigin(raw.href || finalUrl.href);
         const bytes = base64ToBytes(raw.base64);
         report('browser-context-success', '授权浏览器资源读取成功 / Authorized browser resource acquired', `${humanBytes(bytes.byteLength)} · ${raw.contentType || page.contentType || 'binary'}`);
         return {
           res: null,
           bytes,
-          finalUrl: raw.href || finalUrl.href,
+          finalUrl: rawUrl.href,
           contentType: raw.contentType || page.contentType || 'application/octet-stream',
           contentDisposition: raw.contentDisposition || '',
           authorizedBrowserContext: true,
@@ -785,18 +802,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'L2C_RESOLVE_URL') {
-    const report = makeProgressReporter(sender);
+    const report = makeProgressReporter(sender, message.startedAt);
     const tabId = sender?.tab?.id;
     const controller = new AbortController();
-    if (Number.isInteger(tabId)) {
-      const previous = activeJobs.get(tabId);
-      previous?.controller?.abort?.();
-      activeJobs.set(tabId, { controller, startedAt: report.startedAt, report });
-    }
-    report('start', '开始处理链接 / Starting', 'Link2Context 已接管这条链接。进度面板可随时 STOP。');
     (async () => {
+      // Reject untrusted/stale requests before they can replace or abort a valid
+      // job on the same tab. Authorization is a state-mutation gate, not merely
+      // an execution gate.
       if (!(await senderIsAllowed(sender))) throw new PipelineFailure('SITE_NOT_ENABLED', 'PIPELINE', 'This site is not enabled for automatic Link2Context access / 当前网站未启用自动 Link2Context');
       if (message.userGesture !== true) throw new PipelineFailure('USER_GESTURE_REQUIRED', 'PIPELINE', 'A real user gesture is required / 必须由真实用户操作触发');
+
+      if (Number.isInteger(tabId)) {
+        const previous = activeJobs.get(tabId);
+        previous?.controller?.abort?.();
+        activeJobs.set(tabId, { controller, startedAt: report.startedAt, report });
+      }
+      report('start', '开始处理链接 / Starting', 'Link2Context 已接管这条链接。进度面板可随时 STOP。');
       return resolveForAi(message.url, report, {
         targetHost: senderHost(sender),
         signal: controller.signal,
