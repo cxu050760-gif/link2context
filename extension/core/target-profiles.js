@@ -64,12 +64,19 @@ const PROFILES = Object.freeze({
     maxContextImages: 6,
     preferredTextStrategy: 'cdp-input-insert-text',
     sendStrategies: ['cdp-enter'],
-    debugger: 'required-for-current-live-verified-path',
+    debugger: 'required-for-proven-v053-path',
     live: {
-      manualText: { status: CAPABILITY_STATUS.LIVE_VERIFIED, verifiedAt: '2026-08-22' },
-      editableText: { status: CAPABILITY_STATUS.LIVE_VERIFIED, verifiedAt: '2026-08-22' },
+      manualText: { status: CAPABILITY_STATUS.UNVERIFIED, verifiedAt: null },
+      editableText: { status: CAPABILITY_STATUS.UNVERIFIED, verifiedAt: null },
       mixedMedia: { status: CAPABILITY_STATUS.UNVERIFIED, verifiedAt: null },
-      autoSend: { status: CAPABILITY_STATUS.LIVE_VERIFIED, verifiedAt: '2026-08-22' },
+      autoSend: { status: CAPABILITY_STATUS.UNVERIFIED, verifiedAt: null },
+    },
+    baseline: {
+      version: '0.5.3',
+      verifiedAt: '2026-08-22',
+      manualText: CAPABILITY_STATUS.LIVE_VERIFIED,
+      editableText: CAPABILITY_STATUS.LIVE_VERIFIED,
+      autoSend: CAPABILITY_STATUS.LIVE_VERIFIED,
     },
   },
 });
