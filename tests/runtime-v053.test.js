@@ -41,9 +41,10 @@ test('v053 regression 04: Qwen/Tongyi ordinary text fallback remains state-verif
   assert.match(qwenBridge, /QWEN_EDITOR_STATE_UNCONFIRMED/);
 });
 
-test('v053 regression 05: generic fallback still forbids direct DOM fallback for Qwen', () => {
-  assert.match(runtime, /Direct DOM replacement is intentionally forbidden for Qwen\/Tongyi/);
-  assert.match(runtime, /if \(qwenHost\) return false/);
+test('v053 regression 05: generic fallback has no executable Qwen path', () => {
+  assert.match(runtime, /const qwenHost =/);
+  assert.match(runtime, /if \(qwenHost\) return;/);
+  assert.ok(runtime.indexOf('if (qwenHost) return;') < runtime.indexOf('let activeJob = null'));
 });
 
 test('v053 regression 06: Qwen fallback intercepts a pasted URL before generic V0.5.3 runtime', () => {
