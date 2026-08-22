@@ -29,12 +29,14 @@ test('qianwen-cn 02: manifest explicitly grants debugger and routes Chinese Qian
   assert.ok(!scripts.includes('qianwen-cn-state-bridge-v053.js'));
 });
 
-test('qianwen-cn 03: debugger bridge is host-scoped, top-frame scoped, and detaches after each operation', () => {
+test('qianwen-cn 03: debugger bridge is HTTPS-host-scoped, top-frame scoped, and detaches after each operation', () => {
   assert.match(background, /import '\.\/background\.js'/);
   assert.match(background, /message\.type === QIANWEN_DEBUGGER_MESSAGE/);
   assert.match(background, /sender\?\.frameId > 0/);
   assert.match(background, /qianwen\.com/);
   assert.match(background, /qwenwork\.cn/);
+  assert.match(background, /url\.protocol === 'https:'/);
+  assert.match(background, /current\?\.protocol === 'https:'/);
   assert.match(background, /chrome\.debugger\.attach/);
   assert.match(background, /chrome\.debugger\.detach/);
 });
@@ -66,6 +68,7 @@ test('qianwen-cn 06: pasted URL is intercepted once and failed CDP state is fail
   assert.match(bridge, /QIANWEN_CDP_STATE_UNCONFIRMED/);
   assert.match(background, /another debugger\|already attached/);
   assert.match(background, /String\(failurePrefix\) \+ '_BUSY'/);
+  assert.match(background, /String\(failurePrefix\) \+ '_COMMAND_FAILED'/);
 });
 
 test('qianwen-cn 07: V0.6 keeps the proven Qianwen CDP binary/text fallback while the package version advances', () => {
