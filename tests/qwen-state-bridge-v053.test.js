@@ -66,3 +66,11 @@ test('qwen-state 07: package syntax check includes the new adapter and version s
   assert.equal(pkg.version, '0.5.3');
   assert.equal(manifest.version, '0.5.3');
 });
+
+test('qwen-state 08: live regression cannot pass on DOM visibility alone when user typing is what enables send', () => {
+  assert.match(bridge, /DOM-only ghost frequently disappears or/);
+  assert.match(bridge, /const send = findSendButton\(current\)/);
+  assert.match(bridge, /QWEN_EDITOR_STATE_UNCONFIRMED/);
+  const binary = bridge.slice(bridge.indexOf('async function attachBinaryWithStateProof'), bridge.indexOf('function stopEvent'));
+  assert.doesNotMatch(binary, /if \(filenameVisible\) return/);
+});
