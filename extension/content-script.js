@@ -143,6 +143,17 @@
     showToast.timer = setTimeout(() => toast.remove(), error ? 6500 : 3500);
   }
 
+  function reportLocalProgress(stage, label, detail = '', extra = {}) {
+    try {
+      globalThis.__link2contextReportProgress?.({
+        stage, label, detail,
+        state: extra.state || 'running',
+        level: extra.level || '',
+        log: extra.log || label,
+      });
+    } catch { /* diagnostics must never break page handoff */ }
+  }
+
   function base64ToFile(base64, fileName, mime) {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
@@ -266,23 +277,40 @@
           if (!result?.ok) throw new Error(result?.error || '链接读取失败 / Failed to read link');
           if (!editor.isConnected) throw new Error('输入框已被页面替换，请重新发送链接 / Composer was replaced');
 
+          reportLocalProgress('handoff-received', '后台处理完成，开始交给当前网页 AI / Starting page handoff', `目标 / Target: ${result.targetHost || location.hostname}；方式 / Mode: ${result.handoffMode || (result.kind === 'binary' ? 'attachment' : 'text')}；原因 / Reason: ${result.handoffReason || 'binary-or-default'}`);
+
           if (result.kind === 'binary') {
+            reportLocalProgress('attachment-start', '正在上传附件 / Uploading attachment', `${result.fileName} · ${result.mime || 'application/octet-stream'}`);
             await attachBinary(result, editor);
-            setEditorText(editor, result.note);
+            reportLocalProgress('attachment-confirmed', '附件已在网页 AI 中登记 / Attachment confirmed', `已确认 / Confirmed: ${result.fileName}`);
+            if (!setEditorText(editor, result.note)) throw new Error('无法写入附件说明 / Could not write attachment note');
             showToast(`Link2Context 已附加 ${result.fileName}`);
             await new Promise((r) => setTimeout(r, 350));
           } else {
-            setEditorText(editor, result.payload);
+            reportLocalProgress('inline-inject', '正在写入输入框 / Injecting text into composer', `${String(result.payload || '').length.toLocaleString()} chars`);
+            if (!setEditorText(editor, result.payload)) throw new Error('无法写入网页 AI 输入框 / Could not inject the web-AI composer');
+            reportLocalProgress('inline-confirmed', '文本已写入当前消息 / Inline context prepared', '等待发送 / Waiting to send.');
             showToast('Link2Context 已把链接内容放进当前消息');
           }
 
           if (job.autoSubmit) {
+            reportLocalProgress('send-attempt', '正在发送 / Sending', '已完成内容交付，正在触发当前网页 AI 的发送动作。');
             const sent = await submit(editor, job.submitter);
-            if (!sent) showToast('内容已准备好，但未识别发送按钮；请再按一次发送。', true);
+            if (!sent) {
+              const detail = '内容已准备好，但未确认网页 AI 已发送；请手动再按一次发送。 / Content is ready, but send could not be confirmed.';
+              reportLocalProgress('send-unconfirmed', '未确认发送 / Send not confirmed', detail, { state: 'error' });
+              showToast('内容已准备好，但未识别发送按钮；请再按一次发送。', true);
+            } else {
+              reportLocalProgress('sent', '已完成并发送 / Handoff complete and sent', `目标 / Target: ${result.targetHost || location.hostname}`, { state: 'success' });
+            }
+          } else {
+            reportLocalProgress('ready-in-composer', '内容已准备好 / Ready in composer', 'Link2Context 已完成抓取、清洗和页面交付。', { state: 'success' });
           }
           resolve(true);
         } catch (error) {
-          restoreFailedJob(job, String(error?.message || error));
+          const message = String(error?.message || error);
+          reportLocalProgress('handoff-error', '页面交付失败 / Page handoff failed', message, { state: 'error' });
+          restoreFailedJob(job, message);
           resolve(false);
         } finally {
           job.busy = false;
