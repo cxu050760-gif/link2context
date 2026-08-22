@@ -16,9 +16,14 @@ test('does not treat normal ChatGPT conversations as public share links', () => 
   assert.equal(resolveSourceUrl(new URL('https://chatgpt.com/c/abcDEF123')).kind, 'generic');
 });
 
-test('rejects malformed ChatGPT share ids', () => {
-  assert.throws(() => parseChatGptShare(new URL('https://chatgpt.com/share/%2e%2e')));
+test('dot segments normalize away and malformed share ids are rejected by constructors', () => {
+  assert.equal(parseChatGptShare(new URL('https://chatgpt.com/share/%2e%2e')), null);
   assert.throws(() => chatGptShareUrl('../evil'));
+  assert.throws(() => chatGptShareUrl('abc/def'));
+});
+
+test('encoded slash cannot become a ChatGPT share id', () => {
+  assert.throws(() => parseChatGptShare(new URL('https://chatgpt.com/share/abc%2Fdef123')));
 });
 
 test('preserves WorkBuddy special routing', () => {
