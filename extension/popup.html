@@ -29,6 +29,16 @@
       <p id="handoffPreferenceHint" class="hint">智能模式保持现有策略：例如 ChatGPT 对话优先 Markdown 文档，DeepSeek / 豆包等短内容优先长文本。</p>
     </section>
 
+    <section class="auto-box">
+      <strong>处理完成后的发送 / Send after handoff</strong>
+      <label for="sendPreference">当你原本按 Enter 或点击发送时，Link2Context 处理完成后怎么做</label>
+      <select id="sendPreference">
+        <option value="manual">手动确认 / Manual（推荐，默认）</option>
+        <option value="auto">自动发送 / Auto-send</option>
+      </select>
+      <p id="sendPreferenceHint" class="hint">手动确认：先把文档或长文本准备好，停在输入框里，由你检查后再点一次发送。单纯粘贴链接永远不会立即自动发送。</p>
+    </section>
+
     <section class="auto-box browser-context-box">
       <div class="setting-head">
         <strong>授权浏览器上下文 / Authorized browser context</strong>
