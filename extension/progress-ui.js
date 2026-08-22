@@ -18,6 +18,53 @@
   let lastState = null;
   let hideTimer = null;
 
+  function destroyPanel() {
+    clearInterval(timer); timer = null;
+    clearTimeout(hideTimer); hideTimer = null;
+    root?.remove();
+    root = shadow = panel = stageEl = detailEl = elapsedEl = logEl = stopEl = null;
+  }
+
+  function appendLog(message, level = '') {
+    if (!message || !logEl) return;
+    const item = document.createElement('div');
+    item.className = `log ${level}`.trim();
+    const seconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    item.textContent = `[${seconds}s] ${message}`;
+    logEl.appendChild(item);
+    while (logEl.children.length > MAX_LOGS) logEl.firstElementChild?.remove();
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function requestStop() {
+    const jobStart = currentStartedAt || startedAt;
+    if (!jobStart || !stopEl) return;
+    stopEl.disabled = true;
+    stageEl.textContent = '正在停止… / Stopping…';
+    detailEl.textContent = '正在停止网络读取、分页、附件交付和自动发送。 / Cancelling fetch, pagination, handoff and auto-send.';
+    appendLog('用户请求 STOP / Stop requested', 'warn');
+
+    // V0.5.3 local cancellation closes the old gap where background fetch had
+    // already finished but attachment injection / auto-send was still running.
+    try {
+      document.dispatchEvent(new CustomEvent('link2context:cancel', {
+        detail: { startedAt: jobStart },
+      }));
+    } catch { /* background cancellation still runs below */ }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'L2C_CANCEL_JOB', startedAt: jobStart }, (result) => {
+        if (chrome.runtime.lastError || !result?.ok) {
+          appendLog('后台 STOP 请求未确认；本地交付仍已停止 / Background stop unconfirmed; local handoff cancelled', 'warn');
+        } else if (result.cancelled === false && result.reason === 'no-active-job') {
+          appendLog('后台抓取已结束；已停止本地交付阶段 / Fetch already finished; local handoff cancelled', 'warn');
+        }
+      });
+    } catch {
+      appendLog('后台 STOP 请求发送失败；本地交付仍已停止 / Background stop failed; local handoff cancelled', 'warn');
+    }
+  }
+
   function ensurePanel() {
     if (panel?.isConnected) return;
     root = document.getElementById(ROOT_ID);
@@ -26,7 +73,8 @@
       root.id = ROOT_ID;
       Object.assign(root.style, {
         position: 'fixed', right: '18px', bottom: '18px', zIndex: '2147483647',
-        width: '390px', maxWidth: 'calc(100vw - 36px)', fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        width: '390px', maxWidth: 'calc(100vw - 36px)',
+        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       });
       document.documentElement.appendChild(root);
       shadow = root.attachShadow({ mode: 'open' });
@@ -64,31 +112,7 @@
       suppressedStartedAt = currentStartedAt;
       destroyPanel();
     });
-    stopEl.addEventListener('click', () => {
-      const jobStart = currentStartedAt || startedAt;
-      if (!jobStart) return;
-      stopEl.disabled = true;
-      stageEl.textContent = '正在停止… / Stopping…';
-      detailEl.textContent = '正在中止网络、分页或后台浏览器读取。 / Cancelling fetch, pagination, or browser fallback.';
-      appendLog('用户请求 STOP / Stop requested', 'warn');
-      try {
-        chrome.runtime.sendMessage({ type: 'L2C_CANCEL_JOB', startedAt: jobStart }, (result) => {
-          if (chrome.runtime.lastError || !result?.ok) {
-            stopEl.disabled = false;
-            appendLog('STOP 请求未确认 / Stop request not confirmed', 'error');
-          }
-        });
-      } catch {
-        stopEl.disabled = false;
-      }
-    });
-  }
-
-  function destroyPanel() {
-    clearInterval(timer); timer = null;
-    clearTimeout(hideTimer); hideTimer = null;
-    root?.remove();
-    root = shadow = panel = stageEl = detailEl = elapsedEl = logEl = stopEl = null;
+    stopEl.addEventListener('click', requestStop);
   }
 
   function startClock(startMs) {
@@ -100,17 +124,6 @@
     };
     tick();
     timer = setInterval(tick, 1000);
-  }
-
-  function appendLog(message, level = '') {
-    if (!message || !logEl) return;
-    const item = document.createElement('div');
-    item.className = `log ${level}`.trim();
-    const seconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
-    item.textContent = `[${seconds}s] ${message}`;
-    logEl.appendChild(item);
-    while (logEl.children.length > MAX_LOGS) logEl.firstElementChild?.remove();
-    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function resetForNewJob(incomingStartedAt) {
@@ -151,7 +164,8 @@
 
     const key = `${data.stage}|${data.detail}|${state}`;
     if (key !== lastState) {
-      appendLog(data.log || data.label || data.stage, state === 'error' ? 'error' : state === 'success' ? 'ok' : data.level === 'warn' ? 'warn' : '');
+      appendLog(data.log || data.label || data.stage,
+        state === 'error' ? 'error' : state === 'success' ? 'ok' : data.level === 'warn' ? 'warn' : '');
       lastState = key;
     }
 
