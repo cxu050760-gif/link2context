@@ -87,9 +87,17 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  function resetForNewJob() {
+    clearTimeout(hideTimer); hideTimer = null;
+    lastState = null;
+    if (logEl) logEl.replaceChildren();
+    if (panel) panel.dataset.state = 'running';
+  }
+
   function updateProgress(data) {
     ensurePanel();
-    clearTimeout(hideTimer); hideTimer = null;
+    if (data.stage === 'start') resetForNewJob();
+    else { clearTimeout(hideTimer); hideTimer = null; }
     if (!timer || data.stage === 'start') startClock(data.startedAt);
 
     const state = data.state || 'running';
