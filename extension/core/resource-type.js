@@ -69,7 +69,7 @@ function magicType(bytes) {
   if (starts(bytes, [0x50,0x4b,0x03,0x04]) || starts(bytes, [0x50,0x4b,0x05,0x06]) || starts(bytes, [0x50,0x4b,0x07,0x08])) return { kind: 'archive', mime: 'application/zip', reason: 'magic:zip' };
   if (starts(bytes, [0x1f,0x8b])) return { kind: 'archive', mime: 'application/gzip', reason: 'magic:gzip' };
   if (starts(bytes, [0x37,0x7a,0xbc,0xaf,0x27,0x1c])) return { kind: 'archive', mime: 'application/x-7z-compressed', reason: 'magic:7z' };
-  if (ascii(bytes, 0, 7) === 'Rar!\x1a\x07') return { kind: 'archive', mime: 'application/vnd.rar', reason: 'magic:rar' };
+  if (starts(bytes, [0x52,0x61,0x72,0x21,0x1a,0x07,0x00]) || starts(bytes, [0x52,0x61,0x72,0x21,0x1a,0x07,0x01,0x00])) return { kind: 'archive', mime: 'application/vnd.rar', reason: 'magic:rar' };
   return null;
 }
 
@@ -88,7 +88,6 @@ export function looksLikeTextBytes(bytes, sampleLimit = 8192) {
     new TextDecoder('utf-8', { fatal: true }).decode(sample);
     return true;
   } catch {
-    // Non-UTF8 textual encodings still tend to have few binary control bytes.
     return controls / sample.length < 0.005;
   }
 }
@@ -113,7 +112,6 @@ export function detectResourceType({ bytes, contentType = '', url = '' } = {}) {
   const ext = extensionFromUrl(url);
   const magic = magicType(bytes);
 
-  // Strong binary signatures always win over a lying or generic Content-Type.
   if (magic) {
     if (magic.kind === 'archive' && ['docx','xlsx','pptx'].includes(ext)) {
       const mime = EXTENSION_MIME.get(ext);
@@ -126,7 +124,6 @@ export function detectResourceType({ bytes, contentType = '', url = '' } = {}) {
   const extensionKind = kindForMime(extensionMime);
   const declaredKind = kindForMime(declaredMime);
 
-  // Known binary extensions are a safe fallback when servers send text/plain/octet-stream incorrectly.
   if (extensionMime && !['text','html','json'].includes(extensionKind)) {
     return { kind: extensionKind, mime: extensionMime, extension: ext, reason: `extension:${ext}`, declaredMime };
   }
