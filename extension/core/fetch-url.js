@@ -3,6 +3,7 @@ import { enforceContentLength, MAX_FETCH_BYTES, MAX_REDIRECTS } from './fetch-po
 
 export const DEFAULT_TIMEOUT_MS = 25_000;
 export const DEFAULT_ATTEMPTS = 2;
+export const STRICT_TARGET_ADDRESS_SPACE = 'public';
 
 function concatChunks(chunks, total) {
   const merged = new Uint8Array(total);
@@ -14,29 +15,48 @@ function concatChunks(chunks, total) {
   return merged;
 }
 
+function fetchInit(controller, targetAddressSpace) {
+  const init = {
+    redirect: 'manual',
+    credentials: 'omit',
+    cache: 'no-store',
+    referrerPolicy: 'no-referrer',
+    signal: controller.signal,
+  };
+  if (targetAddressSpace) init.targetAddressSpace = targetAddressSpace;
+  return init;
+}
+
+function enforceHttps(url, requireHttps) {
+  if (requireHttps && url.protocol !== 'https:') {
+    throw new Error('Proxy compatibility fallback is HTTPS-only / 代理兼容回退仅允许 HTTPS');
+  }
+}
+
 export async function fetchBounded(initialUrl, {
   fetchFn = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxBytes = MAX_FETCH_BYTES,
   maxRedirects = MAX_REDIRECTS,
+  targetAddressSpace = STRICT_TARGET_ADDRESS_SPACE,
+  requireHttps = false,
 } = {}) {
   if (typeof fetchFn !== 'function') throw new Error('Fetch API unavailable / Fetch API 不可用');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     let current = validatePublicHttpUrl(initialUrl);
+    enforceHttps(current, requireHttps);
     let res;
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
-      res = await fetchFn(current.href, {
-        redirect: 'manual', credentials: 'omit', cache: 'no-store', signal: controller.signal,
-        targetAddressSpace: 'public',
-      });
+      res = await fetchFn(current.href, fetchInit(controller, targetAddressSpace));
       if (res?.type === 'opaqueredirect' && res.status === 0) {
         throw new Error('Redirect target is hidden by the browser; refusing unsafe follow / 浏览器隐藏了重定向目标，已安全拒绝');
       }
       if (res.status >= 300 && res.status < 400) {
         if (hop === maxRedirects) throw new Error('Too many redirects / 重定向次数过多');
         current = validateRedirect(current, res.headers.get('location'));
+        enforceHttps(current, requireHttps);
         continue;
       }
       break;
@@ -72,6 +92,7 @@ export async function fetchBounded(initialUrl, {
       bytes,
       finalUrl: current.href,
       contentType: res.headers.get('content-type') || '',
+      compatibilityFallback: targetAddressSpace == null,
     };
   } finally {
     clearTimeout(timer);
@@ -83,8 +104,12 @@ function retryableError(error) {
   return error?.name === 'AbortError' || /network|failed to fetch|timeout|HTTP 5\d\d/i.test(message);
 }
 
-export async function fetchBoundedWithRetry(initialUrl, options = {}) {
-  const attempts = Math.max(1, Number(options.attempts ?? DEFAULT_ATTEMPTS));
+function compatibilityEligible(error) {
+  const message = String(error?.message || error || '');
+  return error instanceof TypeError || /failed to fetch|network|address space|local network/i.test(message);
+}
+
+async function retrySeries(initialUrl, options, attempts) {
   let lastError;
   for (let i = 0; i < attempts; i += 1) {
     try { return await fetchBounded(initialUrl, options); }
@@ -95,4 +120,33 @@ export async function fetchBoundedWithRetry(initialUrl, options = {}) {
     }
   }
   throw lastError;
+}
+
+export async function fetchBoundedWithRetry(initialUrl, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts ?? DEFAULT_ATTEMPTS));
+  const proxyCompatibilityFallback = options.proxyCompatibilityFallback !== false;
+
+  try {
+    return await retrySeries(initialUrl, {
+      ...options,
+      targetAddressSpace: options.targetAddressSpace ?? STRICT_TARGET_ADDRESS_SPACE,
+    }, attempts);
+  } catch (strictError) {
+    if (!proxyCompatibilityFallback || !compatibilityEligible(strictError)) throw strictError;
+
+    const checked = validatePublicHttpUrl(initialUrl);
+    if (checked.protocol !== 'https:') throw strictError;
+
+    try {
+      return await fetchBounded(checked, {
+        ...options,
+        targetAddressSpace: null,
+        requireHttps: true,
+      });
+    } catch (fallbackError) {
+      const strictMessage = String(strictError?.message || strictError || 'strict fetch failed');
+      const fallbackMessage = String(fallbackError?.message || fallbackError || 'compatibility fetch failed');
+      throw new Error(`${fallbackMessage} / 兼容重试失败；严格模式原错误: ${strictMessage}`);
+    }
+  }
 }
