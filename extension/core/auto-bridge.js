@@ -22,6 +22,7 @@ const KNOWN_AI_HOST_PATTERNS = [
 
 export const INLINE_BINARY_LIMIT = 6 * 1024 * 1024;
 export const MAX_EDITOR_PAYLOAD_CHARS = 250_000;
+export const CHATGPT_EDITOR_SOFT_LIMIT_CHARS = 24_000;
 export const MAX_AUTO_URL_CHARS = 8192;
 
 export function normalizeHost(host = '') {
@@ -56,6 +57,27 @@ export function shouldAutoExpand({ editorText = '', candidateText = '', host = '
     && !String(editorText).trim()
     && extractSingleHttpUrl(candidateText)
   );
+}
+
+export function planContextHandoff({ targetHost = '', sourceKind = 'generic', payloadChars = 0 } = {}) {
+  const host = normalizeHost(targetHost);
+  const size = Math.max(0, Number(payloadChars) || 0);
+  const chatGptTarget = host === 'chatgpt.com' || host.endsWith('.chatgpt.com');
+  const conversationSource = sourceKind === 'workbuddy' || sourceKind === 'chatgpt-share';
+
+  // ChatGPT's rich composer is materially less reliable for large programmatic
+  // text replacement than its attachment path. Conversation sources are file-first
+  // there so WorkBuddy and ChatGPT shares use the same stable handoff mechanism.
+  if (chatGptTarget && conversationSource) {
+    return { mode: 'attachment', reason: 'chatgpt-conversation-file-first', threshold: 0 };
+  }
+  if (chatGptTarget && size >= CHATGPT_EDITOR_SOFT_LIMIT_CHARS) {
+    return { mode: 'attachment', reason: 'chatgpt-editor-soft-limit', threshold: CHATGPT_EDITOR_SOFT_LIMIT_CHARS };
+  }
+  if (size >= MAX_EDITOR_PAYLOAD_CHARS) {
+    return { mode: 'attachment', reason: 'global-editor-hard-limit', threshold: MAX_EDITOR_PAYLOAD_CHARS };
+  }
+  return { mode: 'text', reason: 'inline-safe', threshold: chatGptTarget ? CHATGPT_EDITOR_SOFT_LIMIT_CHARS : MAX_EDITOR_PAYLOAD_CHARS };
 }
 
 const SEND_RE = /(^|\b)(send|submit|ask|发送|送出|提交|提问|发送消息|send message)(\b|$)/i;

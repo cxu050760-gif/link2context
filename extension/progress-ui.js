@@ -113,7 +113,7 @@
       clearTimeout(hideTimer); hideTimer = null;
       if (!currentStartedAt) currentStartedAt = incomingStartedAt || Date.now();
     }
-    if (!timer || data.stage === 'start') startClock(data.startedAt);
+    if (!timer || data.stage === 'start') startClock(data.startedAt || currentStartedAt);
 
     const state = data.state || 'running';
     panel.dataset.state = state;
@@ -133,6 +133,16 @@
       clearInterval(timer); timer = null;
     }
   }
+
+  // progress-ui.js and content-script.js run in the same extension isolated world.
+  // Expose a local-only reporter so the page-handoff phase can continue the exact
+  // same panel after the background worker has finished fetching/parsing.
+  globalThis.__link2contextReportProgress = (data = {}) => {
+    updateProgress({
+      ...data,
+      startedAt: Number(data.startedAt) || currentStartedAt || startedAt || Date.now(),
+    });
+  };
 
   chrome.runtime.onMessage.addListener((message) => {
     if (!message || message.type !== 'L2C_PROGRESS') return;

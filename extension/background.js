@@ -8,8 +8,8 @@ import { safeDisplayUrl, validatePublicHttpUrl } from './core/url-safety.js';
 import {
   buildBinaryNote,
   buildContextPayload,
-  MAX_EDITOR_PAYLOAD_CHARS,
   isAllowedAiHost,
+  planContextHandoff,
   sanitizeAttachmentName,
 } from './core/auto-bridge.js';
 
@@ -249,7 +249,7 @@ function contextFileName(resolved) {
   return 'link2context-context.md';
 }
 
-async function resolveForAi(input, report) {
+async function resolveForAi(input, report, { targetHost = '' } = {}) {
   report('validate', '正在检查链接 / Validating URL', '检查协议、目标地址和安全边界。');
   const sourceUrl = validatePublicHttpUrl(input);
   const resolved = resolveSourceUrl(sourceUrl);
@@ -276,6 +276,7 @@ async function resolveForAi(input, report) {
       ok: true, kind: 'binary', sourceUrl: displayUrl, fileName,
       mime: contentType.split(';', 1)[0] || 'application/octet-stream', size: bytes.byteLength,
       base64: bytesToBase64(bytes), note: buildBinaryNote(displayUrl, fileName, contentType.split(';', 1)[0]),
+      handoffMode: 'attachment', targetHost,
     };
   }
 
@@ -304,21 +305,27 @@ async function resolveForAi(input, report) {
   const limited = truncateText(markdown);
   if (limited.truncated) limited.text += '\n\n> ⚠️ Output was truncated by the safety limit. / 输出因安全上限被截断。';
   const payload = buildContextPayload(limited.text, displayUrl);
-  if (payload.length > MAX_EDITOR_PAYLOAD_CHARS) {
+  const handoff = planContextHandoff({ targetHost, sourceKind: resolved.kind, payloadChars: payload.length });
+  const modeLabel = handoff.mode === 'attachment' ? 'Markdown 附件 / Markdown attachment' : '输入框文本 / Inline text';
+  report('handoff-plan', '已选择交付方式 / Handoff mode selected', `目标 / Target: ${targetHost || 'unknown'}；来源 / Source: ${resolved.kind}；大小 / Size: ${payload.length.toLocaleString()} chars；方式 / Mode: ${modeLabel}；原因 / Reason: ${handoff.reason}`);
+
+  if (handoff.mode === 'attachment') {
     const fileName = contextFileName(resolved);
     const encoded = new TextEncoder().encode(limited.text);
-    report('ready', '内容较长，已转为干净 Markdown 附件 / Long clean context converted to attachment', `${fileName}，${humanBytes(encoded.byteLength)}；正在交给网页 AI。`, { state: 'success' });
+    report('ready', '已准备干净 Markdown 附件 / Clean Markdown attachment ready', `${fileName}，${humanBytes(encoded.byteLength)}；目标：${targetHost || 'unknown'}。`, { state: 'success' });
     return {
       ok: true, kind: 'binary', sourceUrl: displayUrl, fileName, mime: 'text/markdown',
       size: encoded.byteLength, base64: bytesToBase64(encoded),
       note: buildBinaryNote(displayUrl, fileName, 'text/markdown'), convertedFromText: true,
+      handoffMode: 'attachment', handoffReason: handoff.reason, targetHost,
     };
   }
-  report('ready', '链接读取完成，正在交给网页 AI / Fetch complete; handing off', `最终上下文 ${payload.length.toLocaleString()} 字符。`, { state: 'success' });
+  report('ready', '链接读取完成，正在交给网页 AI / Fetch complete; handing off', `最终上下文 ${payload.length.toLocaleString()} 字符；方式：输入框文本。`, { state: 'success' });
   return {
     ok: true,
     kind: resolved.kind === 'workbuddy' || resolved.kind === 'chatgpt-share' ? resolved.kind : kind,
     sourceUrl: displayUrl, size: bytes.byteLength, payload,
+    handoffMode: 'text', handoffReason: handoff.reason, targetHost,
   };
 }
 
@@ -338,7 +345,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       if (!(await senderIsAllowed(sender))) throw new Error('This site is not enabled for automatic Link2Context access / 当前网站未启用自动 Link2Context');
       if (message.userGesture !== true) throw new Error('A real user gesture is required / 必须由真实用户操作触发');
-      return resolveForAi(message.url, report);
+      return resolveForAi(message.url, report, { targetHost: senderHost(sender) });
     })()
       .then(sendResponse)
       .catch((error) => {
