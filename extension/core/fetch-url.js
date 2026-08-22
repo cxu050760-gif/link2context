@@ -117,6 +117,17 @@ export async function fetchBounded(initialUrl, {
       }
       break;
     }
+    // Link2Context never issues Range requests. A 206 therefore means the
+    // origin/proxy supplied only a fragment of the requested representation.
+    // Treating it as a normal `ok` response would silently label partial bytes
+    // as complete source context.
+    if (res?.status === 206) {
+      throw new FetchFailure(
+        'UNEXPECTED_PARTIAL_CONTENT_206',
+        'HTTP 206 Partial Content was returned for a non-Range request; refusing to treat it as complete / 未请求 Range 却收到 HTTP 206，不能把部分内容冒充完整资源',
+        { status: 206 },
+      );
+    }
     if (!res?.ok) throw httpFailure(res?.status ?? 0, res?.statusText ?? '');
     try { enforceContentLength(res.headers.get('content-length')); }
     catch (error) { throw new FetchFailure('RESPONSE_TOO_LARGE', String(error?.message || error), { cause: error }); }
