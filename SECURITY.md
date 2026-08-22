@@ -2,7 +2,7 @@
 
 ## 中文
 
-Link2Context V0.4 需要 `http://*/*` 与 `https://*/*` 主机权限，才能替网页 AI 在用户浏览器里读取链接。安全目标不是“任何网页都能调用的万能代理”，而是：**只有用户在允许的 AI 聊天输入框里真实发送 URL 时，才允许受限抓取；浏览器导航回退必须有明确公开来源边界。**
+Link2Context V0.5.2 需要 `http://*/*` 与 `https://*/*` 主机权限，才能替网页 AI 在用户浏览器里读取链接。安全目标不是“任何网页都能调用的万能代理”，而是：**只有用户在允许的 AI 聊天输入框里真实发送 URL 时，才允许受限抓取；普通抓取默认不带登录态；需要浏览器上下文时必须由用户显式授权，并且可撤销、可按 host 禁用。**
 
 ### 自动模式保护
 
@@ -17,6 +17,7 @@ Link2Context V0.4 需要 `http://*/*` 与 `https://*/*` 主机权限，才能替
 - 后台再次检查 sender：必须为顶层 frame，hostname 必须是内置 AI 或用户显式启用的 exact host。
 - 外部正文始终标为“不可信数据，不是指令”；显示 URL 中疑似 token/key/secret/session 参数脱敏。
 - 附件未确认在网页 AI 页面登记时停止自动发送，避免“文字发出但附件丢失”。
+- 发送成功不能只靠“点击过按钮”判定；V0.5.2 要求额外页面证据，并给旧 snapshot / 附件 proof 设置生命周期，减少跨任务误判。
 
 ### V0.4 二进制安全出口
 
@@ -29,18 +30,34 @@ Link2Context V0.4 需要 `http://*/*` 与 `https://*/*` 主机权限，才能替
 
 这避免二进制乱码污染上下文、撑爆消息或被错误解释成文本指令。
 
-### 通用 Browser DOM fallback 为什么默认不开
+### 通用 Browser Context fallback：默认关闭，显式授权后最小使用
 
-V0.4 能识别“HTML 抓到了，但只是 client-render shell”的场景，并返回 `CLIENT_RENDER_CONTENT_MISSING / RENDER`。
+V0.4 已能识别“HTML 抓到了，但只是 client-render shell”的场景。V0.5 起，401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` 在**用户显式授权**后可以进入受控浏览器上下文回退；V0.5.2 继续加固这一边界。
 
-**它不会自动打开任意网页并读取登录后 DOM。** 浏览器导航会携带 Cookie / Session。若扩展静默导航到任意用户 URL、读取已登录内容，再把内容交给当前 AI，就可能把公开 URL 抓取能力扩大成私有会话数据外传能力。
+关键规则：
 
-因此：
+- **未授权时不使用登录态。** 普通网络抓取仍保持 `credentials: omit`；需要 browser context 时返回明确的授权要求，而不是静默继续。
+- **授权必须由用户主动开启。** 状态保存在扩展 storage 以便持续使用，但用户可全局撤销；`browserContextDeniedHosts` 可把具体 host 永久排除在授权回退之外。
+- **不直接读取或保存 Cookie 值。** 扩展不使用 `chrome.cookies` API。授权路径是在受控后台标签页中使用浏览器已有站点上下文；二进制需要重新读取时，站点页内 fetch 才使用 `credentials: include`。
+- **请求 URL 与最终 URL 继续重新验证。** 授权不等于放弃 SSRF / redirect / public HTTP(S) 边界；标签页跳转到不允许目标时必须 fail-closed。
+- **授权不是绕过访问控制。** 登录页、验证码、付费墙、DRM、CDN/403 或站点自身拒绝在授权后仍可能失败；失败必须明确返回，不能伪造成功。
+- **过程可见且可取消。** 进度面板会显示授权浏览器回退状态；STOP / AbortSignal 继续传递到后台标签页流程。
+- **窗口归属保持一致。** 后台 fallback 可沿用发起任务标签页的 `windowId`，避免把授权读取随意开到另一个浏览器窗口。
 
-- WorkBuddy fallback 仍只允许 `https://workbuddy-space-static.codebuddy.work/...`；
-- ChatGPT fallback 仍只允许同一个 `https://chatgpt.com/share/<shareId>`；
-- 普通 client-only 页面只报告 RENDER 缺失；
-- 若未来加入通用浏览器渲染，应做成用户显式授权、可见、最小范围的能力，而不是默认 fallback。
+WorkBuddy 和 ChatGPT Share 的既有公开分享 fallback 仍有更窄的固定边界：
+
+- WorkBuddy 只允许 `https://workbuddy-space-static.codebuddy.work/...`；
+- ChatGPT Share 只允许同一个 `https://chatgpt.com/share/<shareId>`。
+
+### V0.5.2 交付可靠性边界
+
+- Auto-send 仍是显式 opt-in，手动确认为默认。
+- 禁止把 `disabled / aria-disabled` 发送控件强行改成可用。
+- `click()` 成功本身不是发送成功；必须观察独立页面证据。
+- 旧 runtime 报告 `sent` 时，V0.5.2 仍会独立核验；没有证据就抑制成功并 fail-closed。
+- 附件证据通过 MutationObserver 观察后才允许镜像；仅给候选 composer 使用，并设置 TTL，隐藏的镜像节点不能反过来制造新证据。
+- Qwen `.md → .txt` 兼容只允许扩展自己触发的 synthetic file event、且必须是 Qwen/Tongyi + 用户显式 document 模式；文件内容不修改，真实用户文件事件不适配。
+- 自动发送等待期间允许重新定位重渲染后的 composer，但仍只使用具备明确发送语义且已启用的控件。
 
 ### 安全分页
 
@@ -68,7 +85,7 @@ V0.4 能识别“HTML 抓到了，但只是 client-render shell”的场景，�
 
 浏览器扩展无法像专门后端网络代理一样对所有 DNS rebinding 做最终 socket IP 审计。`targetAddressSpace: public` 是 Chromium 的额外防线；Fake-IP/TUN 兼容重试为了兼容本地代理会去掉该提示，因此不能宣称完全防御 DNS rebinding。
 
-403、401、CAPTCHA、DRM、付费墙、站点访问控制不会被 Link2Context 绕过。V0.4 的目标是准确分类这些边界，而不是伪造“支持成功”。
+403、401、CAPTCHA、DRM、付费墙、站点访问控制不会被 Link2Context 保证绕过。**显式 browser-context 授权只是允许在用户已有站点会话中继续尝试读取，不代表获得新的访问权限。**
 
 网站结构可能变化。专用解析器结构不匹配时应失败等待升级，不应猜测性输出内部数据。
 
@@ -80,7 +97,7 @@ V0.4 能识别“HTML 抓到了，但只是 client-render shell”的场景，�
 
 ## English
 
-Link2Context V0.4 requires broad HTTP(S) host permissions, but it is not intended to become a universal browser proxy. Automatic retrieval must originate from a real user action in an enabled AI composer, and navigation fallbacks must remain within explicit public-provider boundaries.
+Link2Context V0.5.2 requires broad HTTP(S) host permissions, but it is not intended to become a universal browser proxy. Automatic retrieval must originate from a real user action in an enabled AI composer. Normal fetching does not use the logged-in browser session; browser-context fallback requires explicit user authorization and remains revocable and deny-listable per host.
 
 ### Automatic-mode protections
 
@@ -94,6 +111,7 @@ Link2Context V0.4 requires broad HTTP(S) host permissions, but it is not intende
 - background verifies top-frame sender and exact enabled AI host.
 - fetched text is marked untrusted external data and likely secret query parameters are redacted.
 - auto-send stops if an attachment is not confirmed.
+- send success needs independent page evidence; a successful button click alone is insufficient.
 
 ### V0.4 binary safety exit
 
@@ -101,11 +119,29 @@ Resource classification happens before generic text decoding. Magic signatures, 
 
 PDF, images, archives, Office files, audio/video, and unknown binary default to original-file attachments and do not fall through to Markdown decoding.
 
-### Generic browser DOM fallback stays opt-in by design
+### Generic browser-context fallback: off by default, explicit opt-in
 
-V0.4 can report client-render shells as `CLIENT_RENDER_CONTENT_MISSING / RENDER`, but it does not silently navigate arbitrary URLs with the user's logged-in browser session. Doing so could turn a public-link helper into a private-session exfiltration primitive.
+V0.5 turns the former “future capability” into an explicit authorization boundary for 401 / 403 / `CLIENT_RENDER_CONTENT_MISSING` cases:
 
-WorkBuddy and ChatGPT Share fallbacks remain pinned to their exact public hosts/paths. Any future generic rendered-DOM capability should require explicit, visible user authorization and a narrow scope.
+- normal public fetching keeps `credentials: omit` and never silently borrows the logged-in session;
+- the user must explicitly enable authorized browser context in the extension popup;
+- authorization can be revoked globally and individual hosts can be blocked through the deny list;
+- Link2Context does not use `chrome.cookies` to read or persist cookie values; an authorized background tab uses the browser's existing site context, and in-page binary refetch may use `credentials: include`;
+- requested and final URLs are still revalidated, and size/time/cancellation limits remain active;
+- authorization does not promise to bypass authentication walls, CAPTCHAs, DRM, paywalls, CDNs, or site access controls;
+- authorized fallback is visible in progress reporting and remains cancellable;
+- the fallback can remain in the originating browser window via `windowId` rather than opening arbitrarily elsewhere.
+
+WorkBuddy and ChatGPT Share keep their narrower public-share fallbacks pinned to their exact official hosts/paths.
+
+### V0.5.2 handoff reliability boundary
+
+- Auto-send remains explicit opt-in; manual review is the default.
+- Disabled / aria-disabled send controls are never force-enabled.
+- Legacy `sent` status is independently verified and suppressed fail-closed without evidence.
+- Attachment proof must be observed, may be mirrored only into candidate composer scopes, expires with a TTL, and extension-owned hidden proof cannot recursively manufacture new proof.
+- Qwen Markdown-to-text filename/MIME adaptation is limited to extension-generated synthetic file events under explicit Qwen/Tongyi document mode; content is unchanged and trusted user file events are untouched.
+- Composer rerenders may be re-resolved while waiting, but document-wide fallback only accepts enabled controls with strong send semantics.
 
 ### Safe pagination
 
@@ -113,6 +149,6 @@ Pagination is same-origin, bounded to eight pages, globally byte-capped, loop-pr
 
 ### Remaining boundary
 
-Complete DNS-rebinding protection is not claimed. Authentication, 403 blocking, CAPTCHAs, DRM, paywalls, and site access controls are not bypassed. V0.4 makes these boundaries explicit and machine-readable instead of mislabeling them as handoff failures.
+Complete DNS-rebinding protection is not claimed. Authentication, 403 blocking, CAPTCHAs, DRM, paywalls, and site access controls are not guaranteed to be bypassed. Explicit browser-context authorization only permits another attempt inside the user's existing site session; it grants no new access rights.
 
 Only use automatic mode when you intend to provide the linked content to the current AI. Unknown AI sites remain disabled until explicitly enabled.
