@@ -18,6 +18,21 @@
       <p class="hint">ChatGPT、豆包、Kimi、Claude、Gemini、DeepSeek、千问等已内置支持；其他网页 AI 可在这里一键启用。</p>
     </section>
 
+    <section class="auto-box browser-context-box">
+      <div class="setting-head">
+        <strong>授权浏览器上下文 / Authorized browser context</strong>
+        <span id="browserContextState" class="badge">检测中…</span>
+      </div>
+      <p class="hint">开启后，当普通 Fetch（抓取）遇到 401 / 403，或 HTML 只有 JS 空壳时，Link2Context 可以自动在后台使用当前浏览器的 JavaScript 渲染、Session（会话）和 Cookie（登录状态）继续尝试。首次开启即视为持续授权，不会每个链接重复询问；使用时进度面板会明确显示。</p>
+      <button id="toggleBrowserContext" class="secondary">读取状态…</button>
+      <label for="browserContextDeniedHosts">永不使用登录态的网站 / Never use browser context on these hosts</label>
+      <input id="browserContextDeniedHosts" type="text" placeholder="example.com, private.example.org">
+      <div class="row">
+        <button id="saveDeniedHosts" class="secondary">保存排除列表 / Save deny list</button>
+      </div>
+      <p class="hint">关闭授权会立即阻止新的登录态回退；正在运行的任务可直接在右下角进度面板点 <b>STOP / 停止</b>。</p>
+    </section>
+
     <details>
       <summary>手动转换工具 / Manual converter</summary>
       <label for="url">链接 / URL</label>
