@@ -52,22 +52,40 @@ test('streamed body larger than limit is rejected even without content-length', 
   await assert.rejects(() => fetchBounded('https://example.com', { maxBytes: 3, fetchFn: async () => response('1234') }), /exceeds|超过/);
 });
 
-test('network errors retry once', async () => {
+test('network errors retry once without dropping targetAddressSpace', async () => {
   let n = 0;
-  const out = await fetchBoundedWithRetry('https://example.com', { attempts: 2, fetchFn: async () => {
+  const seen = [];
+  const out = await fetchBoundedWithRetry('https://example.com', { attempts: 2, fetchFn: async (_url, options) => {
     n += 1;
+    seen.push(options);
     if (n === 1) throw new TypeError('Failed to fetch');
     return response('ok');
   } });
   assert.equal(n, 2);
+  assert.equal(seen[0].targetAddressSpace, 'public');
+  assert.equal(seen[1].targetAddressSpace, 'public');
   assert.equal(new TextDecoder().decode(out.bytes), 'ok');
   assert.equal(out.compatibilityFallback, false);
 });
 
-test('strict address-space failure falls back once without targetAddressSpace for HTTPS proxy/fake-IP compatibility', async () => {
+test('strict address-space failure does not fall back without explicit opt-in', async () => {
+  const seen = [];
+  await assert.rejects(() => fetchBoundedWithRetry('https://example.com/data', {
+    attempts: 1,
+    fetchFn: async (_url, options) => {
+      seen.push(options);
+      throw new TypeError('Failed to fetch');
+    },
+  }), /Failed to fetch/);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].targetAddressSpace, 'public');
+});
+
+test('explicit compatibility fallback can retry once without targetAddressSpace', async () => {
   const seen = [];
   const out = await fetchBoundedWithRetry('https://example.com/data', {
     attempts: 1,
+    proxyCompatibilityFallback: true,
     fetchFn: async (_url, options) => {
       seen.push(options);
       if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');
@@ -84,7 +102,7 @@ test('strict address-space failure falls back once without targetAddressSpace fo
   assert.equal(new TextDecoder().decode(out.bytes), 'proxy-ok');
 });
 
-test('proxy compatibility fallback can be disabled', async () => {
+test('proxy compatibility fallback can be disabled explicitly', async () => {
   let n = 0;
   await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
     attempts: 1,
@@ -94,19 +112,21 @@ test('proxy compatibility fallback can be disabled', async () => {
   assert.equal(n, 1);
 });
 
-test('proxy compatibility fallback is HTTPS-only', async () => {
+test('proxy compatibility fallback is HTTPS-only even when explicitly requested', async () => {
   let n = 0;
   await assert.rejects(() => fetchBoundedWithRetry('http://example.com', {
     attempts: 1,
+    proxyCompatibilityFallback: true,
     fetchFn: async () => { n += 1; throw new TypeError('Failed to fetch'); },
   }), /Failed to fetch/);
   assert.equal(n, 1);
 });
 
-test('compatibility fallback still blocks private redirect before the second request', async () => {
+test('explicit compatibility fallback still blocks private redirect before the second request', async () => {
   let n = 0;
   await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
     attempts: 1,
+    proxyCompatibilityFallback: true,
     fetchFn: async (_url, options) => {
       n += 1;
       if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');
@@ -116,10 +136,11 @@ test('compatibility fallback still blocks private redirect before the second req
   assert.equal(n, 2);
 });
 
-test('compatibility fallback refuses HTTPS to HTTP downgrade redirects', async () => {
+test('explicit compatibility fallback refuses HTTPS to HTTP downgrade redirects', async () => {
   let n = 0;
   await assert.rejects(() => fetchBoundedWithRetry('https://example.com', {
     attempts: 1,
+    proxyCompatibilityFallback: true,
     fetchFn: async (_url, options) => {
       n += 1;
       if (options.targetAddressSpace === 'public') throw new TypeError('Failed to fetch');

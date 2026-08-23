@@ -56,13 +56,24 @@ export function articleIdentityEvidence(first, candidate) {
   // page has lots. Body overlap is supporting evidence, not a hard requirement.
   if (bodySimilarity >= 0.08) score += 1;
 
+  const titleSupport = titleSimilarity >= 0.45;
+  const bodySupport = bodySimilarity >= 0.08;
+  const independentSupport = titleSupport || bodySupport || authorMatch;
+  // Pagination is intentionally conservative: page-provided canonical metadata
+  // and a generic/same title are attacker-controlled. Neither is accepted as a
+  // sole proof that a candidate is the same article.
+  const sameArticle = canonicalMatch
+    ? independentSupport
+    : titleSupport && (authorMatch || bodySupport);
+
   return {
-    sameArticle: canonicalMatch || score >= 3,
+    sameArticle,
     score,
     canonicalMatch,
     titleSimilarity,
     bodySimilarity,
     authorMatch,
+    independentSupport,
   };
 }
 

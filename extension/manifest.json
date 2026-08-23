@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Link2Context",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Paste a link into a web AI; Link2Context preserves structured text, key images and original files, then hands the context to the current AI. / 在网页 AI 中粘贴链接，完整读取结构化正文、关键图片与原文件并交给当前 AI。",
   "permissions": ["downloads", "clipboardWrite", "storage", "activeTab", "tabs", "scripting", "offscreen", "debugger"],
   "host_permissions": ["http://*/*", "https://*/*"],

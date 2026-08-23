@@ -68,6 +68,12 @@
       || document;
   }
 
+  function attachmentScope(editor) {
+    const scope = composerScope(editor);
+    if (scope !== document) return scope;
+    return editor?.parentElement || null;
+  }
+
   function report(stage, label, detail = '', extra = {}) {
     try {
       globalThis.__link2contextReportProgress?.({
@@ -185,9 +191,9 @@
     });
   }
 
-  async function resolveUrl(url) {
+  async function resolveUrl(url, startedAt) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true }, (response) => {
+      chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true, startedAt }, (response) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
         else resolve(response);
       });
@@ -280,6 +286,11 @@
     });
   }
 
+  function usableFileInput(input, file) {
+    return Boolean(input) && !input.disabled && input.getAttribute?.('aria-disabled') !== 'true'
+      && (file.type.startsWith('image/') || !isImageOnlyInput(input)) && inputAccepts(input, file);
+  }
+
   function attachmentScore(el) {
     const text = controlText(el);
     let score = 0;
@@ -291,29 +302,39 @@
     return score;
   }
 
+  function safeAttachmentControl(el) {
+    if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return String(el.type || el.getAttribute('type') || '').toLowerCase() !== 'submit';
+  }
+
   function bestAttachmentControl(scope) {
+    if (!scope) return null;
     return [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
-      .filter(visible)
+      .filter((el) => safeAttachmentControl(el))
       .map((el) => ({ el, score: attachmentScore(el) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   async function findFileInput(editor, file, job) {
-    const candidate = () => {
-      const inputs = [...document.querySelectorAll('input[type="file"]')]
-        .filter((input) => file.type.startsWith('image/') || !isImageOnlyInput(input));
-      return inputs.find((input) => inputAccepts(input, file)) || inputs[0] || null;
-    };
-    let input = candidate();
+    const scope = attachmentScope(editor);
+    if (!scope) return null;
+    const local = () => [...scope.querySelectorAll('input[type="file"]')]
+      .find((input) => !input.disabled && input.getAttribute('aria-disabled') !== 'true' && usableFileInput(input, file)) || null;
+    let input = local();
     if (input) return input;
-    const control = bestAttachmentControl(composerScope(editor)) || bestAttachmentControl(document);
+
+    const baseline = new Set(document.querySelectorAll('input[type="file"]'));
+    const control = bestAttachmentControl(scope);
     if (!control) return null;
     control.click();
     await sleep(400, job);
     assertActive(job);
-    input = candidate();
-    return input;
+    input = local();
+    if (input) return input;
+    return [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !baseline.has(candidate) && !candidate.disabled
+        && candidate.getAttribute('aria-disabled') !== 'true' && usableFileInput(candidate, file)) || null;
   }
 
   function filenameHints(fileName) {
@@ -325,32 +346,28 @@
     return [...new Set(hints.filter((item) => item.length >= 8))];
   }
 
-  function filenameVisible(fileName) {
-    const text = normalize(document.body?.innerText || document.body?.textContent || '').toLowerCase();
+  function filenameVisible(fileName, editor) {
+    const scope = attachmentScope(editor);
+    if (!scope) return false;
+    const text = normalize(scope.innerText || scope.textContent || '').toLowerCase();
     return filenameHints(fileName).some((hint) => text.includes(hint.toLowerCase()));
   }
 
   async function attachBinary(result, editor, job) {
     const file = new File([base64ToBytes(result.base64)], result.fileName, { type: result.mime || 'application/octet-stream' });
     const input = await findFileInput(editor, file, job);
-    if (!input) return null;
-    const oldAccept = input.getAttribute('accept');
-    if (!inputAccepts(input, file)) input.removeAttribute('accept');
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    } finally {
-      if (oldAccept === null) input.removeAttribute('accept');
-      else input.setAttribute('accept', oldAccept);
-    }
+    if (!usableFileInput(input, file)) return null;
+    const filenameWasVisible = filenameVisible(file.name, editor);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
-      if (filenameVisible(file.name)) return { editor: currentComposer(editor) || editor, fileName: file.name };
+      if (!filenameWasVisible && filenameVisible(file.name, editor)) return { editor: currentComposer(editor) || editor, fileName: file.name };
       await sleep(250, job);
     }
     return null;
@@ -363,7 +380,7 @@
       assertActive(job);
       await sleep(180, job);
       if (generatingEvidence()) return true;
-      if (!filenameVisible(fileName)) return true;
+      if (!filenameVisible(fileName, editor)) return true;
       if (!currentComposer(editor)?.isConnected) return true;
     }
     return false;
@@ -380,11 +397,11 @@
       showToast('Link2Context 已有千问任务在处理，请等待或先 STOP。', true);
       return false;
     }
-    const job = { editor, url, busy: true, cancelled: false, autoSubmit: await autoSendEnabled() };
+    const job = { editor, url, busy: true, cancelled: false, autoSubmit: await autoSendEnabled(), startedAt: Date.now() };
     activeJob = job;
     try {
       report('qianwen-cdp-start', '千问真实键盘模式 / Qianwen CDP input mode', 'V0.5.3 使用 Chrome 调试协议输入，不再直接改千问 DOM。');
-      const result = await resolveUrl(url);
+      const result = await resolveUrl(url, job.startedAt);
       assertActive(job);
       if (!result?.ok) {
         const error = new Error(result?.error || '链接读取失败 / Failed to read link');
@@ -465,7 +482,9 @@
   }
 
   document.addEventListener('link2context:cancel', () => {
-    if (activeJob?.busy) activeJob.cancelled = true;
+    if (!activeJob?.busy) return;
+    activeJob.cancelled = true;
+    chrome.runtime.sendMessage({ type: 'L2C_CANCEL_JOB', startedAt: activeJob.startedAt }, () => void chrome.runtime.lastError);
   }, true);
 
   document.addEventListener('paste', (event) => {
@@ -495,11 +514,12 @@
     if (!button || !visible(button)) return;
     const editor = currentComposer(editorFromTarget(event.target));
     if (!editor) return;
+    const scope = composerScope(editor);
+    if (scope === document || !scope.contains(button)) return;
     const url = singleUrl(editorText(editor));
     if (!url) return;
     const text = controlText(button);
     if (/(stop|cancel|attach|upload|image|photo|camera|voice|mic|search|tool|停止|取消|附件|上传|图片|相机|语音|搜索|工具)/i.test(text)) return;
-    if (!composerScope(editor).contains(button)) return;
     stopEvent(event);
     start(editor, url).catch(() => {});
   }, true);

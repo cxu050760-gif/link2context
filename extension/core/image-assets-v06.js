@@ -33,6 +33,14 @@ function reportSafe(onProgress, payload) {
   try { onProgress?.(payload); } catch { /* progress must not break acquisition */ }
 }
 
+function throwIfCancelled(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error('Cancelled by user / 用户已停止当前 Link2Context 任务');
+  error.code = 'USER_CANCELLED';
+  error.stage = 'PIPELINE';
+  throw error;
+}
+
 export async function acquireContextImages(document, {
   signal = null,
   onProgress = null,
@@ -45,7 +53,7 @@ export async function acquireContextImages(document, {
   const assets = [];
   let total = 0;
   for (let i = 0; i < selected.length; i += 1) {
-    if (signal?.aborted) break;
+    throwIfCancelled(signal);
     const item = selected[i];
     if (total >= maxTotalBytes) break;
     let url;
@@ -65,8 +73,12 @@ export async function acquireContextImages(document, {
         attempts: 1,
         maxBytes,
         signal,
-        proxyCompatibilityFallback: true,
+        // Never silently drop targetAddressSpace for article images. A remote
+        // image is still an untrusted network target and must keep the same
+        // public-address boundary as the primary document fetch.
+        proxyCompatibilityFallback: false,
       });
+      throwIfCancelled(signal);
       const resource = detectResourceType({
         bytes: fetched.bytes,
         contentType: fetched.contentType,
@@ -89,7 +101,7 @@ export async function acquireContextImages(document, {
       });
       total += fetched.bytes.byteLength;
     } catch (error) {
-      if (signal?.aborted || error?.code === 'USER_CANCELLED') break;
+      if (signal?.aborted || error?.code === 'USER_CANCELLED') throwIfCancelled(signal);
       reportSafe(onProgress, {
         stage: 'image-skip',
         index: i + 1,
@@ -98,6 +110,7 @@ export async function acquireContextImages(document, {
       });
     }
   }
+  throwIfCancelled(signal);
   return {
     assets,
     selectedCount: selected.length,

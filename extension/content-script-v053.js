@@ -15,6 +15,10 @@
   const qwenHost = host === 'chat.qwen.ai' || host.endsWith('.chat.qwen.ai')
     || host === 'qwen.ai' || host.endsWith('.qwen.ai')
     || host === 'tongyi.aliyun.com' || host.endsWith('.tongyi.aliyun.com');
+  // Qwen/Tongyi has a dedicated state-safe owner earlier in the manifest. The
+  // generic legacy owner must not remain a second path that can bypass its
+  // attachment/editor contracts merely because script ordering changes.
+  if (qwenHost) return;
   const isBuiltInAiHost = (value) => BUILTIN_AI_HOSTS.some((known) => value === known || value.endsWith(`.${known}`));
 
   let siteEnabled = isBuiltInAiHost(host);
@@ -78,6 +82,11 @@
       || document;
   }
 
+  function attachmentScope(editor) {
+    const scope = composerScope(editor);
+    return scope !== document ? scope : editor?.parentElement || null;
+  }
+
   function nativeValueSetter(editor, value) {
     const proto = editor instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -131,8 +140,6 @@
       }
     } catch { /* framework may reject execCommand */ }
 
-    // Direct DOM replacement is intentionally forbidden for Qwen/Tongyi because
-    // it can create a visible/hidden state split (ghost text + stale original URL).
     if (qwenHost) return false;
 
     try {
@@ -283,11 +290,6 @@
       };
     }
 
-    // V0.5.3: Qwen/Tongyi no longer receives extracted text through synthetic
-    // rich-editor mutation. Real-site testing showed that the DOM could display
-    // Link2Context text while Qwen's internal state still contained the URL.
-    // A plain-text document is the fail-closed transport: one source of truth,
-    // no ghost layer, no stale URL accidentally sent.
     if (qwenHost) {
       const markdown = extractedMarkdown(result);
       return {
@@ -370,43 +372,45 @@
     return score;
   }
 
+  function safeAttachmentControl(el) {
+    if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return String(el.type || el.getAttribute('type') || '').toLowerCase() !== 'submit';
+  }
+
   function bestAttachmentControl(scope) {
+    if (!scope) return null;
     return [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
-      .filter(visible)
+      .filter((el) => safeAttachmentControl(el))
       .map((el) => ({ el, score: attachmentControlScore(el) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   function candidateFileInput(scope, file) {
-    const inputs = [...scope.querySelectorAll('input[type="file"]')].filter((input) => !isImageOnlyInput(input));
-    return inputs.find((input) => inputAccepts(input, file)) || (qwenHost ? inputs[0] : null) || null;
+    if (!scope) return null;
+    return [...scope.querySelectorAll('input[type="file"]')]
+      .find((input) => !input.disabled && input.getAttribute('aria-disabled') !== 'true'
+        && !isImageOnlyInput(input) && inputAccepts(input, file)) || null;
   }
 
   async function findFileInput(editor, file, job) {
-    const scope = composerScope(editor);
-    let input = candidateFileInput(scope, file) || candidateFileInput(document, file);
+    const scope = attachmentScope(editor);
+    if (!scope) return null;
+    let input = candidateFileInput(scope, file);
     if (input) return input;
 
-    const first = bestAttachmentControl(scope) || (qwenHost ? bestAttachmentControl(document) : null);
-    if (first) {
-      first.click();
-      await sleep(350, job);
-      assertActive(job);
-      input = candidateFileInput(scope, file) || candidateFileInput(document, file);
-      if (input) return input;
-
-      if (qwenHost) {
-        const second = bestAttachmentControl(document);
-        if (second && second !== first) {
-          second.click();
-          await sleep(350, job);
-          assertActive(job);
-          input = candidateFileInput(scope, file) || candidateFileInput(document, file);
-        }
-      }
-    }
-    return input || null;
+    const baseline = new Set(document.querySelectorAll('input[type="file"]'));
+    const first = bestAttachmentControl(scope);
+    if (!first) return null;
+    first.click();
+    await sleep(350, job);
+    assertActive(job);
+    input = candidateFileInput(scope, file);
+    if (input) return input;
+    return [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !baseline.has(candidate) && !candidate.disabled
+        && candidate.getAttribute('aria-disabled') !== 'true' && !isImageOnlyInput(candidate)
+        && inputAccepts(candidate, file)) || null;
   }
 
   function filenameHints(fileName) {
@@ -435,34 +439,24 @@
   async function attachFile(file, editor, job) {
     assertActive(job);
     const input = await findFileInput(editor, file, job);
-    if (!input) throw new Error('找不到兼容的网页 AI 附件入口 / No compatible attachment input found');
-
-    const oldAccept = input.getAttribute('accept');
-    if (qwenHost && file.type === 'text/plain' && !inputAccepts(input, file)) {
-      const rules = String(oldAccept || '').split(',').map((x) => x.trim()).filter(Boolean);
-      for (const extra of ['.txt', 'text/plain']) if (!rules.includes(extra)) rules.push(extra);
-      input.setAttribute('accept', rules.join(','));
+    if (!input || input.disabled || input.getAttribute('aria-disabled') === 'true' || !inputAccepts(input, file)) {
+      throw new Error('找不到兼容的网页 AI 附件入口 / No compatible attachment input found');
     }
 
-    try {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    } finally {
-      if (qwenHost && file.type === 'text/plain') {
-        if (oldAccept === null) input.removeAttribute('accept');
-        else input.setAttribute('accept', oldAccept);
-      }
-    }
+    const localScope = attachmentScope(editor);
+    const filenameWasVisible = scopeHasFilename(localScope, file.name);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
       const editorNow = currentComposer(editor);
-      const local = composerScope(editorNow || editor);
-      if (scopeHasFilename(local, file.name) || scopeHasFilename(document.body, file.name)) return true;
+      const local = attachmentScope(editorNow || editor);
+      if (!filenameWasVisible && scopeHasFilename(local, file.name)) return true;
       await sleep(250, job);
     }
     throw new Error('附件未被网页 AI 确认登记 / Attachment was not confirmed by the web AI');
@@ -470,13 +464,14 @@
 
   function sendScore(el, editor, scope) {
     if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return -Infinity;
+    if (scope === document || !scope.contains(el)) return -Infinity;
     const text = controlText(el);
     if (/(stop|cancel|attach|upload|image|photo|camera|voice|mic|record|search|tool|停止|取消|附件|上传|图片|照片|相机|语音|麦克风|搜索|工具)/i.test(text)) return -Infinity;
     let score = 0;
     if (/(^|\b)(send|ask|发送|送出|提问|发送消息|send message)(\b|$)/i.test(text)) score += 20;
     if (/(send|submit)/i.test(el.getAttribute('data-testid') || '')) score += 16;
     if ((el.matches('button,input') && String(el.getAttribute('type')).toLowerCase() === 'submit')) score += 14;
-    if (scope !== document && scope.contains(el)) score += 5;
+    if (scope.contains(el)) score += 5;
     if (el.querySelector?.('svg')) score += 3;
     if (editor && el.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_PRECEDING) score += 1;
     return score;
@@ -484,18 +479,12 @@
 
   function findSendButton(editor, preferred = null) {
     const scope = composerScope(editor);
-    if (preferred?.isConnected && sendScore(preferred, editor, scope) >= 0) return preferred;
-    const local = [...scope.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
+    if (scope === document) return null;
+    if (preferred?.isConnected && scope.contains(preferred) && sendScore(preferred, editor, scope) >= 0) return preferred;
+    return [...scope.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
       .map((el) => ({ el, score: sendScore(el, editor, scope) }))
       .filter((item) => item.score >= 5)
-      .sort((a, b) => b.score - a.score);
-    if (local[0]) return local[0].el;
-
-    const globalStrong = [...document.querySelectorAll('button,[role="button"],input[type="submit"],[data-testid]')]
-      .map((el) => ({ el, score: sendScore(el, editor, document) }))
-      .filter((item) => item.score >= 14)
-      .sort((a, b) => b.score - a.score);
-    return globalStrong[0]?.el || null;
+      .sort((a, b) => b.score - a.score)[0]?.el || null;
   }
 
   function generatingEvidence() {
@@ -522,7 +511,7 @@
       && !signature.every((part) => composerText.includes(part))) return true;
 
     if (fileName) {
-      const local = composerScope(composer || editor);
+      const local = attachmentScope(composer || editor);
       const bodyHas = scopeHasFilename(document.body, fileName);
       const composerHas = scopeHasFilename(local, fileName);
       if (bodyHas && !composerHas) return true;
@@ -577,20 +566,14 @@
       editor, url, trigger, preferredButton,
       busy: true, cancelled: false,
       autoSubmit: await autoSendEnabled(),
+      startedAt: Date.now(),
     };
     activeJob = job;
-
-    // Pasted URLs are intercepted before the page receives them. That is the only
-    // Qwen path that can guarantee the original URL never enters hidden editor state.
-    if (qwenHost && trigger !== 'paste' && normalizeText(editorText(editor)) === normalizeText(url)) {
-      job.autoSubmit = false;
-      showToast('千问安全模式：手动输入的 URL 不自动发送。建议直接粘贴链接触发，避免隐藏编辑器状态残留。', true);
-    }
 
     try {
       report('handoff-local-start', '开始处理链接 / Starting Link2Context', `目标 / Target: ${host}`);
       const result = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true }, (response) => {
+        chrome.runtime.sendMessage({ type: 'L2C_RESOLVE_URL', url, userGesture: true, startedAt: job.startedAt }, (response) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(response);
         });
@@ -651,10 +634,9 @@
         report('sent', '已完成并发送 / Handoff complete and sent', 'V0.5.3 已取得独立发送证据。', { state: 'success' });
         showToast('Link2Context：已自动发送，并确认消息进入对话。');
       } else {
-        report('ready-in-composer', qwenHost ? '附件已准备好，等待手动发送 / Attachment ready' : '内容已准备好，等待手动发送 / Ready for manual send',
-          qwenHost ? '千问安全模式未改写富文本内部状态；请确认附件后发送。' : '请检查内容后手动发送。',
-          { state: 'success' });
-        showToast(qwenHost ? 'Link2Context：千问附件已准备好。' : 'Link2Context：内容已准备好。');
+        report('ready-in-composer', '内容已准备好，等待手动发送 / Ready for manual send',
+          '请检查内容后手动发送。', { state: 'success' });
+        showToast('Link2Context：内容已准备好。');
       }
       return true;
     } catch (error) {
@@ -677,7 +659,9 @@
   }
 
   document.addEventListener('link2context:cancel', () => {
-    if (activeJob?.busy) activeJob.cancelled = true;
+    if (!activeJob?.busy) return;
+    activeJob.cancelled = true;
+    chrome.runtime.sendMessage({ type: 'L2C_CANCEL_JOB', startedAt: activeJob.startedAt }, () => void chrome.runtime.lastError);
   }, true);
 
   document.addEventListener('paste', (event) => {
@@ -707,9 +691,11 @@
     if (!button) return;
     const editor = currentComposer(editorFromTarget(event.target));
     if (!editor) return;
+    const scope = composerScope(editor);
+    if (scope === document || !scope.contains(button)) return;
     const url = singleUrl(editorText(editor));
     if (!url) return;
-    const score = sendScore(button, editor, composerScope(editor));
+    const score = sendScore(button, editor, scope);
     if (score < 5) return;
     stopEvent(event);
     startJob(editor, url, { trigger: 'click', preferredButton: button }).catch(() => {});

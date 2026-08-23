@@ -68,6 +68,12 @@
       || editor?.parentElement?.parentElement?.parentElement || document;
   }
 
+  function attachmentScope(editor) {
+    const scope = composerScope(editor);
+    if (scope !== document) return scope;
+    return editor?.parentElement || null;
+  }
+
   function stopEvent(event) {
     event.preventDefault();
     event.stopPropagation();
@@ -79,6 +85,7 @@
       globalThis.__link2contextReportProgress?.({
         stage, label, detail, state: extra.state || 'running', level: extra.level || '',
         log: extra.log || label, code: extra.code || '', errorStage: extra.errorStage || '',
+        startedAt: Number(extra.startedAt) || activeJob?.startedAt || Date.now(),
       });
     } catch { /* ignore */ }
   }
@@ -137,11 +144,11 @@
     });
   }
 
-  async function resolveUrl(url) {
-    let result = await message('L2C_RESOLVE_URL_V06', { url, userGesture: true });
+  async function resolveUrl(url, startedAt) {
+    let result = await message('L2C_RESOLVE_URL_V06', { url, userGesture: true, startedAt });
     if (result?.ok && result.fallbackToLegacy) {
       report('v06-legacy-fallback', 'V0.6 保留已验证旧路径 / Using proven legacy path', result.reason || '', { level: 'warn' });
-      result = await message('L2C_RESOLVE_URL', { url, userGesture: true });
+      result = await message('L2C_RESOLVE_URL', { url, userGesture: true, startedAt });
       if (result?.ok) result.v06LegacyFallback = true;
     }
     return result;
@@ -233,6 +240,10 @@
     });
   }
 
+  function usableFileInput(input, file) {
+    return Boolean(input) && !input.disabled && input.getAttribute?.('aria-disabled') !== 'true' && inputAccepts(input, file);
+  }
+
   function attachmentScore(el, file) {
     const text = controlText(el);
     let score = 0;
@@ -245,28 +256,46 @@
     return score;
   }
 
-  function fileInput(file) {
-    const inputs = [...document.querySelectorAll('input[type="file"]')];
-    return inputs.find((input) => inputAccepts(input, file)) || null;
+  function safeAttachmentControl(el) {
+    if (!(el instanceof Element) || !visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    const nativeType = String(el.type || el.getAttribute('type') || '').toLowerCase();
+    if (nativeType === 'submit') return false;
+    return true;
+  }
+
+  function fileInput(editor, file, baseline = null) {
+    const scope = attachmentScope(editor);
+    if (scope) {
+      const local = [...scope.querySelectorAll('input[type="file"]')]
+        .find((input) => !input.disabled && input.getAttribute('aria-disabled') !== 'true' && inputAccepts(input, file));
+      if (local) return local;
+    }
+    if (!baseline) return null;
+    return [...document.querySelectorAll('input[type="file"]')]
+      .find((input) => !baseline.has(input) && !input.disabled && input.getAttribute('aria-disabled') !== 'true' && inputAccepts(input, file)) || null;
   }
 
   async function revealInput(editor, file, job) {
-    let input = fileInput(file);
+    let input = fileInput(editor, file);
     if (input) return input;
-    const scope = composerScope(editor);
-    const controls = [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]'), ...document.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
-      .filter((el, i, arr) => visible(el) && arr.indexOf(el) === i)
+    const scope = attachmentScope(editor);
+    if (!scope) return null;
+    const baseline = new Set(document.querySelectorAll('input[type="file"]'));
+    const controls = [...scope.querySelectorAll('button,[role="button"],[role="menuitem"],[aria-label],[title]')]
+      .filter((el) => safeAttachmentControl(el))
       .map((el) => ({ el, score: attachmentScore(el, file) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
     if (!controls[0]) return null;
     controls[0].el.click();
     await sleep(420, job);
-    return fileInput(file);
+    return fileInput(editor, file, baseline);
   }
 
-  function filenameVisible(name) {
-    const text = normalize(document.body?.innerText || document.body?.textContent || '').toLowerCase();
+  function filenameVisible(name, editor) {
+    const scope = attachmentScope(editor);
+    if (!scope) return false;
+    const text = normalize(scope.innerText || scope.textContent || '').toLowerCase();
     const value = normalize(name);
     const stem = value.replace(/\.[^.]+$/, '');
     return [value, stem, stem.slice(0, 24)].filter((item) => item.length >= 7).some((item) => text.includes(item.toLowerCase()));
@@ -274,7 +303,8 @@
 
   async function attachFile(file, editor, job) {
     const input = await revealInput(editor, file, job);
-    if (!input || !inputAccepts(input, file)) return false;
+    if (!usableFileInput(input, file)) return false;
+    const filenameWasVisible = filenameVisible(file.name, editor);
     const dt = new DataTransfer();
     dt.items.add(file);
     input.files = dt.files;
@@ -283,7 +313,7 @@
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       assertActive(job);
-      if (filenameVisible(file.name)) return true;
+      if (!filenameWasVisible && filenameVisible(file.name, editor)) return true;
       await sleep(250, job);
     }
     return false;
@@ -348,12 +378,21 @@
     activeJob = job;
     try {
       report('v06-qianwen-start', 'V0.6 千问结构化交付 / Qianwen structured handoff', '文本仍走已实测 CDP 真输入，图片与文件走附件。');
-      const result = await resolveUrl(url);
+      const result = await resolveUrl(url, job.startedAt);
       assertActive(job);
       if (!result?.ok) {
         const error = new Error(result?.error || '链接读取失败 / Failed to read link');
         error.l2cCode = result?.errorCode || 'PIPELINE_ERROR';
         throw error;
+      }
+
+      const upstreamPartial = Boolean(result.partial || result.sourcePartial || result.mediaPartial);
+      if (upstreamPartial) {
+        job.autoSubmit = false;
+        report('v06-qianwen-upstream-partial', '源内容只取得部分，已禁用自动发送 / Source context is partial; auto-send disabled',
+          (Array.isArray(result.partialReasons) ? result.partialReasons.join('; ') : '') || 'partial context', {
+            level: 'warn', code: 'UPSTREAM_PARTIAL', errorStage: 'HANDOFF',
+          });
       }
 
       const main = await primary(result, pref);
@@ -368,7 +407,7 @@
       if (failedAssets.length) {
         job.autoSubmit = false;
         report('v06-qianwen-media-partial', '部分图片未能交付，禁止自动发送 / Some media failed; auto-send disabled', failedAssets.join(', '), {
-          state: 'error', level: 'warn', code: 'MEDIA_HANDOFF_PARTIAL', errorStage: 'HANDOFF',
+          level: 'warn', code: 'MEDIA_HANDOFF_PARTIAL', errorStage: 'HANDOFF',
         });
       }
 
@@ -399,8 +438,10 @@
         }
         report('sent', '千问 V0.6 已发送 / Qianwen V0.6 sent', `正文媒体=${attached}`, { state: 'success' });
         showToast('Link2Context：千问 V0.6 内容已发送。');
-      } else if (failedAssets.length) {
-        showToast(`Link2Context：正文已准备，但 ${failedAssets.length} 个图片附件失败；请检查后手动发送。`, true);
+      } else if (failedAssets.length || upstreamPartial) {
+        report('ready-partial', '千问内容已部分准备，等待手动确认 / Partial Qianwen context ready for manual review',
+          `upstreamPartial=${upstreamPartial}; failedAssets=${failedAssets.length}`, { state: 'success', level: 'warn', code: 'PARTIAL_READY' });
+        showToast(`Link2Context：千问内容已准备，但存在信息缺失（源内容部分=${upstreamPartial ? '是' : '否'}，附件失败=${failedAssets.length}）；请检查后手动发送。`, true);
       } else {
         report('ready-in-composer', '千问 V0.6 内容已准备 / Qianwen V0.6 ready', `关键图片=${attached}`, { state: 'success' });
         showToast(attached ? `Link2Context：正文和 ${attached} 张关键图片已准备。` : 'Link2Context：千问结构化上下文已准备。');
@@ -427,7 +468,9 @@
   document.addEventListener('link2context:cancel', () => {
     if (!activeJob?.busy) return;
     activeJob.cancelled = true;
-    message('L2C_CANCEL_JOB_V06', { startedAt: activeJob.startedAt }).catch(() => {});
+    const startedAt = activeJob.startedAt;
+    message('L2C_CANCEL_JOB_V06', { startedAt }).catch(() => {});
+    message('L2C_CANCEL_JOB', { startedAt }).catch(() => {});
   }, true);
 
   document.addEventListener('paste', (event) => {
@@ -457,8 +500,10 @@
     if (!button || !visible(button)) return;
     const editor = currentComposer();
     if (!editor) return;
+    const scope = composerScope(editor);
+    if (scope === document || !scope.contains(button)) return;
     const url = singleUrl(editorText(editor));
-    if (!url || !composerScope(editor).contains(button)) return;
+    if (!url) return;
     const text = controlText(button);
     if (/(stop|cancel|attach|upload|image|photo|camera|voice|mic|search|tool|停止|取消|附件|上传|图片|相机|语音|搜索|工具)/i.test(text)) return;
     stopEvent(event);

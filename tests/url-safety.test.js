@@ -30,3 +30,9 @@ test('redacts likely credentials from displayed source URL', () => {
   assert.ok(out.includes('q=keep'));
   assert.ok(out.includes('REDACTED'));
 });
+
+test('redacts OAuth codes and common signed-URL credentials from AI-facing URLs', () => {
+  const out = safeDisplayUrl('https://example.com/cb?code=OAUTH&access_token=ACCESS&X-Amz-Signature=SIGN&ticket=TICKET&q=keep');
+  for (const secret of ['OAUTH', 'ACCESS', 'SIGN', 'TICKET']) assert.ok(!out.includes(secret), secret);
+  assert.ok(out.includes('q=keep'));
+});

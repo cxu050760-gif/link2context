@@ -1,4 +1,4 @@
-const SENSITIVE_QUERY_KEY = /(token|key|secret|signature|sig|auth|password|passwd|credential|session|jwt|api[-_]?key)/i;
+const SENSITIVE_QUERY_KEY = /(?:^|[-_.])(?:token|access[-_]?token|refresh[-_]?token|id[-_]?token|key|secret|client[-_]?secret|signature|sig|auth|authorization|password|passwd|credential|session|jwt|api[-_]?key|code|ticket)(?:$|[-_.])/i;
 
 function parseIpv4(host) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return null;
@@ -53,7 +53,11 @@ export function validatePublicHttpUrl(input) {
     throw new Error('Credentialed URLs are blocked / 禁止在链接中携带账号密码');
   }
 
-  const host = url.hostname.toLowerCase();
+  // DNS hostnames with a trailing root dot are equivalent to their undotted
+  // form for policy purposes (for example localhost. and foo.local.). Keep the
+  // URL itself intact, but canonicalize the hostname before every deny-list and
+  // literal-address decision so the root dot cannot bypass local/metadata rules.
+  const host = url.hostname.toLowerCase().replace(/\.+$/g, '');
   if (!host) throw new Error('Missing hostname / 缺少域名');
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
     throw new Error('Local network targets are blocked / 禁止访问本机或局域网地址');

@@ -1,3 +1,5 @@
+import { safeDisplayUrl } from './url-safety.js';
+
 const KNOWN_AI_HOST_PATTERNS = [
   'chatgpt.com',
   'claude.ai',
@@ -26,6 +28,18 @@ export const INLINE_BINARY_LIMIT = 6 * 1024 * 1024;
 export const MAX_EDITOR_PAYLOAD_CHARS = 250_000;
 export const CHATGPT_EDITOR_SOFT_LIMIT_CHARS = 24_000;
 export const MAX_AUTO_URL_CHARS = 8192;
+
+const LEGACY_BOUNDARY_RE = /---\s*(BEGIN|END)\s+LINK2CONTEXT\s+CONTENT\s*\/\s*(?:内容开始|内容结束)\s*---/gi;
+
+function aiFacingUrl(value) {
+  try { return safeDisplayUrl(value); }
+  catch { return '[invalid-url]'; }
+}
+
+function neutralizeLegacyBoundaries(value) {
+  return String(value || '').replace(LEGACY_BOUNDARY_RE, (_match, direction) =>
+    `--- [EXTERNAL DATA MARKER ESCAPED / 外部数据边界标记已转义] ${String(direction).toUpperCase()} ---`);
+}
 
 export function normalizeHost(host = '') {
   return String(host).trim().toLowerCase().replace(/\.$/, '');
@@ -122,12 +136,12 @@ export function sanitizeAttachmentName(name = 'download.bin') {
 }
 
 export function buildContextPayload(markdown, originalUrl) {
-  const body = String(markdown || '').trim();
+  const body = neutralizeLegacyBoundaries(String(markdown || '').trim());
   return [
     'Link2Context 已在本机读取下面这个链接。请直接基于提取到的内容回答，不要再声称“无法打开链接”或要求我重新上传。',
     'The link was fetched locally by Link2Context. Use the extracted content below as user-provided context.',
     '',
-    `原始链接 / Original URL: ${originalUrl}`,
+    `原始链接 / Original URL: ${aiFacingUrl(originalUrl)}`,
     '',
     '--- BEGIN LINK2CONTEXT CONTENT / 内容开始 ---',
     body,
@@ -140,7 +154,7 @@ export function buildBinaryNote(originalUrl, fileName, mime) {
     'Link2Context 已从下面的链接抓取文件并自动附加到本条消息。请直接读取附件内容。',
     'Link2Context fetched the linked file locally and attached it to this message. Please read the attachment directly.',
     '',
-    `原始链接 / Original URL: ${originalUrl}`,
+    `原始链接 / Original URL: ${aiFacingUrl(originalUrl)}`,
     `文件 / File: ${fileName}`,
     `类型 / Type: ${mime || 'application/octet-stream'}`,
   ].join('\n');

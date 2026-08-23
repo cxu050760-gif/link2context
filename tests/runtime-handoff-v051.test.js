@@ -119,11 +119,11 @@ test('attack 18: historical manual completion was reported as success instead of
   assert.match(content, /\{ state: 'success' \}/);
 });
 
-test('attack 19: V0.6 advances package identity while historical V0.5.1 fallback remains regression-covered', () => {
+test('attack 19: V0.6.1 advances package identity while historical V0.5.1 fallback remains regression-covered', () => {
   const pkg = JSON.parse(read('package.json'));
   const manifest = JSON.parse(read('extension/manifest.json'));
-  assert.equal(pkg.version, '0.6.0');
-  assert.equal(manifest.version, '0.6.0');
+  assert.equal(pkg.version, '0.6.1');
+  assert.equal(manifest.version, '0.6.1');
 });
 
 test('attack 20: handoff format and send behavior remain orthogonal settings', () => {

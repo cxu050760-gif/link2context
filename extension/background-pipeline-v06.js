@@ -43,9 +43,14 @@ async function senderAllowed(sender) {
   return isAllowedAiHost(host, custom);
 }
 
-function reportFor(sender) {
+function normalizedStartedAt(value) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : Date.now();
+}
+
+function reportFor(sender, requestedStartedAt = 0) {
   const tabId = sender?.tab?.id;
-  const startedAt = Date.now();
+  const startedAt = normalizedStartedAt(requestedStartedAt);
   const report = (stage, label, detail = '', extra = {}) => {
     if (!Number.isInteger(tabId)) return;
     try {
@@ -184,7 +189,15 @@ async function htmlContext(url, initial, { signal, windowId, report } = {}) {
     totalBytes += current.fetched.bytes.byteLength;
 
     const next = discoverNextPage(html, currentUrl);
-    if (!next || page >= MAX_PAGINATION_PAGES || totalBytes >= MAX_FETCH_BYTES) break;
+    if (!next) break;
+    if (page >= MAX_PAGINATION_PAGES) {
+      partialReason = `pagination capped at ${MAX_PAGINATION_PAGES} pages / 分页达到 ${MAX_PAGINATION_PAGES} 页安全上限`;
+      break;
+    }
+    if (totalBytes >= MAX_FETCH_BYTES) {
+      partialReason = `pagination reached ${MAX_FETCH_BYTES} byte budget / 分页达到总字节安全上限`;
+      break;
+    }
     report('v06-pagination', '发现同文章分页候选 / Following pagination candidate', `${page + 1}: ${next.url} · ${next.reason}`);
     const remaining = Math.max(1, Math.min(3 * 1024 * 1024, MAX_FETCH_BYTES - totalBytes));
     const loaded = await fetchHtmlPage(next.url, { signal, windowId, report, maxBytes: remaining });
@@ -246,6 +259,7 @@ async function resolveV06(input, { targetHost, signal, windowId, report } = {}) 
         event.stage === 'image-skip' ? '图片读取失败，保留来源引用 / Image skipped' : '读取正文图片 / Fetching image',
         event.url || '', { level: event.stage === 'image-skip' ? 'warn' : '' }),
     });
+    throwIfCancelled(signal);
     bindContextImageAssets(context, imageResult.assets);
     context.metadata.imageAssetsSelected = imageResult.selectedCount;
     context.metadata.imageAssetsAcquired = imageResult.acquiredCount;
@@ -255,9 +269,14 @@ async function resolveV06(input, { targetHost, signal, windowId, report } = {}) 
   const markdown = renderStructuredContext(context);
   const summary = structuredContextSummary(context);
   const plan = planTargetDelivery(profile, { textChars: markdown.length, assetCount: imageResult.assets.length });
-  report('v06-ready', 'V0.6 结构化上下文已准备 / Structured context ready',
-    `${summary.blocks} blocks · ${summary.images} images · ${summary.tables} tables · target=${profile.id} · mode=${plan.mode}`,
-    { state: 'success' });
+  const partialReasons = [];
+  if (summary.partialReason) partialReasons.push(summary.partialReason);
+  if (summary.structuredTruncated) partialReasons.push('structured extraction hit safety limits / 结构化提取达到安全上限');
+  if (imageResult.partial) partialReasons.push(`article images partial (${imageResult.acquiredCount}/${imageResult.selectedCount}) / 正文图片仅部分取得`);
+  const partial = partialReasons.length > 0;
+  report('v06-ready', partial ? 'V0.6 上下文已部分准备 / Structured context partially ready' : 'V0.6 结构化上下文已准备 / Structured context ready',
+    `${summary.blocks} blocks · ${summary.images} images · ${summary.tables} tables · target=${profile.id} · mode=${plan.mode}${partial ? ` · PARTIAL: ${partialReasons.join('; ')}` : ''}`,
+    { level: partial ? 'warn' : '' });
 
   const common = {
     ok: true,
@@ -271,6 +290,10 @@ async function resolveV06(input, { targetHost, signal, windowId, report } = {}) 
     handoffMode: plan.mode,
     handoffReason: plan.reason,
     usedAuthorizedBrowserContext: Boolean(fetched.authorizedBrowserContext),
+    partial,
+    sourcePartial: Boolean(summary.partialReason || summary.structuredTruncated),
+    mediaPartial: imageResult.partial,
+    partialReasons,
   };
 
   if (plan.mode === 'document' || plan.mode === 'document+assets') {
@@ -307,25 +330,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { ok: false, error: 'No sender tab / 无调用标签页' };
       const job = activeJobs.get(tabId);
-      if (!job) return { ok: true, cancelled: false };
+      if (!job) return { ok: true, cancelled: false, reason: 'no-active-job' };
+      if (Number(message.startedAt) && Number(message.startedAt) !== job.startedAt) {
+        return { ok: true, cancelled: false, reason: 'stale-job' };
+      }
       job.controller.abort();
+      job.report?.('cancel-requested', '正在停止当前 V0.6 任务 / Stopping current V0.6 job', '已收到与当前任务匹配的 STOP。', { level: 'warn' });
       return { ok: true, cancelled: true };
     })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
   if (message.type !== RESOLVE_MESSAGE) return undefined;
-  const report = reportFor(sender);
+  const report = reportFor(sender, message.startedAt);
   const controller = new AbortController();
   const tabId = sender?.tab?.id;
-  if (Number.isInteger(tabId)) {
-    activeJobs.get(tabId)?.controller?.abort?.();
-    activeJobs.set(tabId, { controller, startedAt: report.startedAt });
-  }
 
   (async () => {
+    // Authorization and real-user-gesture gates must run before this message is
+    // allowed to mutate shared job state. Otherwise a rejected/stale message can
+    // abort a valid in-flight job merely by arriving later on the same tab.
     if (!(await senderAllowed(sender))) throw fail('SITE_NOT_ENABLED', 'PIPELINE', 'This site is not enabled for Link2Context / 当前网站未启用 Link2Context');
     if (message.userGesture !== true) throw fail('USER_GESTURE_REQUIRED', 'PIPELINE', 'A real user gesture is required / 必须由真实用户操作触发');
+
+    if (Number.isInteger(tabId)) {
+      activeJobs.get(tabId)?.controller?.abort?.();
+      activeJobs.set(tabId, { controller, startedAt: report.startedAt, report });
+    }
+
     return resolveV06(message.url, {
       targetHost: senderHost(sender),
       signal: controller.signal,

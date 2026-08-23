@@ -34,9 +34,14 @@ function authorizationError(policy) {
   return error;
 }
 
-async function requireAuthorizedLocation(url) {
+async function requireAuthorizedLocation(url, expectedOrigin = '') {
   const policy = await authorizationFor(url);
   if (!policy.enabled) throw authorizationError(policy);
+  if (expectedOrigin && policy.target.origin !== expectedOrigin) {
+    const error = new Error(`Rendered acquisition navigated away from ${expectedOrigin} / 渲染采集离开了最初授权来源，已停止`);
+    error.code = 'BROWSER_CONTEXT_CROSS_ORIGIN_NAVIGATION';
+    throw error;
+  }
   return policy.target;
 }
 
@@ -125,6 +130,9 @@ async function advanceRenderedPage(tabId, { allowLoadMore, allowScroll }) {
         const target = controls.find((el) => {
           const value = String(el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
           if (!re.test(value)) return false;
+          // Automatic rendering must not activate forms or submit-like controls.
+          // A hostile page can label a POST/subscribe button “Load more”.
+          if (el.closest('form') || String(el.getAttribute('type') || '').toLowerCase() === 'submit') return false;
           if (el.tagName === 'A') {
             try {
               const destination = new URL(el.getAttribute('href') || '', location.href);
@@ -176,6 +184,7 @@ export async function acquireRenderedHtml(url, {
 } = {}) {
   const policy = await authorizationFor(url);
   if (!policy.enabled) throw authorizationError(policy);
+  const expectedOrigin = policy.target.origin;
 
   const options = { url: policy.target.href, active: false };
   if (Number.isInteger(windowId)) options.windowId = windowId;
@@ -192,7 +201,7 @@ export async function acquireRenderedHtml(url, {
     while (Date.now() - started < timeoutMs) {
       cancelled(signal);
       const tab = await chrome.tabs.get(tabId);
-      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) await requireAuthorizedLocation(tab.url);
+      if (tab?.url?.startsWith('http://') || tab?.url?.startsWith('https://')) await requireAuthorizedLocation(tab.url, expectedOrigin);
       if (tab?.status !== 'complete') {
         await wait(220, signal);
         continue;
@@ -203,7 +212,7 @@ export async function acquireRenderedHtml(url, {
         await wait(250, signal);
         continue;
       }
-      await requireAuthorizedLocation(current.href || tab.url || policy.target.href);
+      await requireAuthorizedLocation(current.href || tab.url || policy.target.href, expectedOrigin);
       if (looksLikeGate(current.bodyPreview)) {
         const error = new Error('Rendered page is still an access gate / 渲染页面仍是登录、验证或访问门槛');
         error.code = 'BROWSER_CONTEXT_ACCESS_GATE';
