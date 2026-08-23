@@ -79,9 +79,7 @@ test('round B: V0.6-to-legacy fallback shares job identity and STOP reaches both
 test('round B: legacy V0.5.3 owner propagates STOP to its background job with exact identity', () => {
   const start = section(legacyContent, 'async function startJob', "document.addEventListener('link2context:cancel'");
   assert.match(start, /startedAt:\s*Date\.now\(\)/);
-  assert.match(start, /resolveUrl\(url, job\.startedAt\)/);
-  const resolve = section(legacyContent, 'async function resolveUrl', 'async function handoffPreference');
-  assert.match(resolve, /L2C_RESOLVE_URL['"][\s\S]*startedAt/);
+  assert.match(start, /L2C_RESOLVE_URL['"][\s\S]*startedAt:\s*job\.startedAt/);
   const cancel = section(legacyContent, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
   assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt:\s*activeJob\.startedAt/);
 });
@@ -155,12 +153,14 @@ test('round C: loaded V0.5.3 Qwen/Qianwen fallback files never bypass site accep
 });
 
 test('round C: loaded V0.5.3 Qwen/Qianwen owners propagate exact STOP identity to legacy background', () => {
-  for (const source of [legacyQianwenCdp, legacyQwenState]) {
-    const startNeedle = source === legacyQianwenCdp ? 'async function start(editor, url)' : 'async function start(editor, url';
+  for (const [source, startNeedle, resolveEnd] of [
+    [legacyQianwenCdp, 'async function start(editor, url)', 'async function writeViaDebugger'],
+    [legacyQwenState, 'async function start(editor, url', 'async function start(editor, url'],
+  ]) {
     const start = section(source, startNeedle, "document.addEventListener('link2context:cancel'");
     assert.match(start, /startedAt:\s*Date\.now\(\)/);
     assert.match(start, /resolveUrl\(url, job\.startedAt\)/);
-    const resolve = section(source, 'async function resolveUrl', 'async function autoSendEnabled');
+    const resolve = section(source, 'async function resolveUrl', resolveEnd);
     assert.match(resolve, /L2C_RESOLVE_URL['"][\s\S]*startedAt/);
     const cancel = section(source, "document.addEventListener('link2context:cancel'", "document.addEventListener('paste'");
     assert.match(cancel, /L2C_CANCEL_JOB['"][\s\S]*startedAt:\s*activeJob\.startedAt/);
